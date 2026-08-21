@@ -61,6 +61,10 @@ type Model struct {
 
 	tokenBuf string
 
+	pending      pendingAction
+	pendingDep   api.Deployment
+	confirmInput string
+
 	teamSel    bool
 	teamCursor int
 	help       bool
@@ -87,7 +91,21 @@ type tokenOkMsg struct {
 	token string
 }
 type statusMsg struct{ text string }
+type actionMsg struct {
+	text string
+	err  error
+}
 type errMsg struct{ err error }
+
+type pendingAction int
+
+const (
+	pendNone pendingAction = iota
+	pendCancel
+	pendDelete
+	pendRedeploy
+	pendRollback
+)
 
 func New(client *api.Client, authed bool, refresh time.Duration, link *config.ProjectLink, target, branch string) Model {
 	m := Model{
@@ -251,6 +269,70 @@ func copyURL(url string) tea.Cmd {
 	}
 }
 
+// handleConfirm runs the typed-confirmation dialog for destructive actions.
+func (m Model) handleConfirm(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc":
+		m.pending = pendNone
+		m.confirmInput = ""
+	case "backspace":
+		if r := []rune(m.confirmInput); len(r) > 0 {
+			m.confirmInput = string(r[:len(r)-1])
+		}
+	case "enter":
+		pa, dep := m.pending, m.pendingDep
+		if pa == pendDelete && m.confirmInput != dep.Name {
+			return m, nil // exact project name required
+		}
+		m.pending = pendNone
+		m.confirmInput = ""
+		return m, m.runAction(pa, dep)
+	default:
+		if len(key) == 1 && !m.confirmTyped() {
+			m.confirmInput += key
+		}
+	}
+	return m, nil
+}
+
+// confirmTyped reports whether the dialog wants free typing at all;
+// non-destructive confirms only take enter.
+func (m Model) confirmTyped() bool { return m.pending == pendDelete }
+
+func (m Model) runAction(pa pendingAction, dep api.Deployment) tea.Cmd {
+	c, team := m.client, m.teamID()
+	id := dep.UID
+	switch pa {
+	case pendCancel:
+		return func() tea.Msg {
+			_, err := c.CancelDeployment(id, team)
+			return actionMsg{"build canceled", err}
+		}
+	case pendDelete:
+		return func() tea.Msg {
+			err := c.DeleteDeployment(id, team)
+			return actionMsg{"deployment deleted", err}
+		}
+	case pendRedeploy:
+		name := dep.Name
+		return func() tea.Msg {
+			_, err := c.Redeploy(name, id, team)
+			return actionMsg{"redeploy of " + name + " started", err}
+		}
+	case pendRollback:
+		name := dep.Name
+		return func() tea.Msg {
+			p, err := c.ProjectByName(name, team)
+			if err != nil {
+				return actionMsg{"", err}
+			}
+			err = c.Promote(p.ID, id, team)
+			return actionMsg{"promoting " + id + " to production", err}
+		}
+	}
+	return nil
+}
+
 func (m Model) loadCurrent() tea.Cmd {
 	switch m.mode {
 	case modeDeployments:
@@ -337,6 +419,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.note = msg.text
 		m.noteAt = time.Now()
 
+	case actionMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err.Error()
+		} else {
+			m.note, m.noteAt = msg.text, time.Now()
+			m.err = ""
+		}
+		return m, m.loadCurrent()
+
 	case errMsg:
 		m.loading = false
 		if errors.Is(msg.err, api.ErrThrottled) {
@@ -392,6 +484,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	}
+
+	if m.pending != pendNone {
+		return m.handleConfirm(key)
 	}
 
 	if m.searchFocus {
@@ -493,6 +589,25 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.depCursor < len(deps) {
 				return m, m.fetchDetail(deps[m.depCursor])
 			}
+		case "x":
+			if m.depCursor < len(deps) && deps[m.depCursor].Status() == "building" {
+				m.pending, m.pendingDep, m.confirmInput = pendCancel, deps[m.depCursor], ""
+			}
+		case "D":
+			if m.depCursor < len(deps) {
+				m.pending, m.pendingDep, m.confirmInput = pendDelete, deps[m.depCursor], ""
+			}
+		case "R":
+			if m.depCursor < len(deps) {
+				m.pending, m.pendingDep, m.confirmInput = pendRedeploy, deps[m.depCursor], ""
+			}
+		case "B":
+			if m.depCursor < len(deps) {
+				d := deps[m.depCursor]
+				if d.Status() == "ready" && d.Target == "production" {
+					m.pending, m.pendingDep, m.confirmInput = pendRollback, d, ""
+				}
+			}
 		case "l":
 			if m.depCursor < len(deps) {
 				d := deps[m.depCursor]
@@ -538,6 +653,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, openBrowser("https://" + m.detail.URL)
 		case "c":
 			return m, copyURL("https://" + m.detail.URL)
+		case "x":
+			if m.detail.Status() == "building" {
+				m.pending, m.pendingDep, m.confirmInput = pendCancel, *m.detail, ""
+			}
+		case "D":
+			m.pending, m.pendingDep, m.confirmInput = pendDelete, *m.detail, ""
+		case "R":
+			m.pending, m.pendingDep, m.confirmInput = pendRedeploy, *m.detail, ""
+		case "B":
+			if m.detail.Status() == "ready" && m.detail.Target == "production" {
+				m.pending, m.pendingDep, m.confirmInput = pendRollback, *m.detail, ""
+			}
 		}
 
 	case modeLogs:

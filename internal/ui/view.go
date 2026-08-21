@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-
 )
 
 var (
@@ -38,6 +37,8 @@ func (m Model) View() string {
 	switch {
 	case m.help:
 		b.WriteString(m.helpView())
+	case m.pending != pendNone:
+		b.WriteString(m.confirmView())
 	case m.teamSel:
 		b.WriteString(m.teamView())
 	default:
@@ -85,7 +86,7 @@ func (m Model) statusBar() string {
 	} else if m.loading {
 		right = dimStyle.Render("refreshing…")
 	} else if !m.lastLoad.IsZero() {
-		right = dimStyle.Render("updated " + rel(time.Now().Sub(m.lastLoad)) )
+		right = dimStyle.Render("updated " + rel(time.Now().Sub(m.lastLoad)))
 	}
 	gap := max(m.width-lipgloss.Width(line)-lipgloss.Width(right), 1)
 	return line + strings.Repeat(" ", gap) + right
@@ -178,7 +179,7 @@ func (m Model) detailView() string {
 }
 
 func (m Model) logsView() string {
-	head := titleStyle.Render("logs — " + m.detail.Name) + dimStyle.Render("  (" + m.detail.ShortSHA() + ")")
+	head := titleStyle.Render("logs — "+m.detail.Name) + dimStyle.Render("  ("+m.detail.ShortSHA()+")")
 	if len(m.logs) == 0 {
 		return head + "\n" + dimStyle.Render("waiting for events…") + "\n"
 	}
@@ -212,6 +213,33 @@ func (m Model) loginView() string {
 	}, "\n") + "\n"
 }
 
+func (m Model) confirmView() string {
+	var title, body string
+	switch m.pending {
+	case pendCancel:
+		title = "Cancel build"
+		body = "Cancel the running build of " + m.pendingDep.Name + " (" + m.pendingDep.ShortSHA() + ")?"
+	case pendDelete:
+		title = errStyle.Render("Delete deployment")
+		body = "This permanently removes " + m.pendingDep.Name + " (" + m.pendingDep.ShortSHA() + ").\n" +
+			"Type \"" + m.pendingDep.Name + "\" to confirm: " + m.confirmInput
+	case pendRedeploy:
+		title = "Redeploy"
+		body = "Rebuild the same commit of " + m.pendingDep.Name + " (" + m.pendingDep.ShortSHA() + ")?"
+	case pendRollback:
+		title = warnStyle.Render("Instant rollback — PRODUCTION")
+		body = "Promote " + m.pendingDep.ShortSHA() + " back to production?\n" +
+			"Traffic switches immediately. Enter to confirm, esc to abort."
+	}
+	return strings.Join([]string{
+		titleStyle.Render(title),
+		"",
+		body,
+		"",
+		dimStyle.Render("enter confirm · esc cancel"),
+	}, "\n") + "\n"
+}
+
 func (m Model) teamView() string {
 	rows := []string{titleStyle.Render("Switch team"), ""}
 	for i, t := range m.teams {
@@ -233,6 +261,8 @@ func (m Model) helpView() string {
 		"enter    deployment detail (deployments) · scope to project (projects)",
 		"l        live logs of the selected deployment",
 		"/        filter (lists) or log search   n  next match",
+		"x        cancel building deployment      D  delete (typed confirm)",
+		"R        redeploy same commit            B  instant rollback (prod)",
 		"c        copy deployment URL to clipboard",
 		"t        switch team             r  refresh now",
 		"o        open in browser         q  quit",
@@ -243,9 +273,9 @@ func (m Model) helpView() string {
 func (m Model) footer() string {
 	hints := map[mode]string{
 		modeLogin:       "type/paste token · enter save · o open browser · q quit",
-		modeDeployments: "j/k move · enter detail · l logs · / filter · s state · t team · c copy · o open · ? help · q quit",
+		modeDeployments: "j/k move · enter detail · l logs · x cancel · R redeploy · B rollback · D delete · / filter · s state · t team · c copy · o open · ? help · q quit",
 		modeProjects:    "j/k move · enter scope to project · / filter · t team · ? help · q quit",
-		modeDetail:      "esc back · l logs · c copy url · o open · q quit",
+		modeDetail:      "esc back · l logs · x cancel · R redeploy · B rollback · D delete · c copy url · o open · q quit",
 	}
 	modeLogsHints := "j/k scroll · / search · n next match · c copy url · esc back · q quit"
 	line := dimStyle.Render(hints[m.mode])
