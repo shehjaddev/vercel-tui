@@ -9,22 +9,22 @@ import (
 // Deployment covers both the v6 list item and the v13 detail object.
 // Unknown JSON fields are ignored, so additive API changes never break us.
 type Deployment struct {
-	UID        string            `json:"uid"`
-	Name       string            `json:"name"`
-	URL        string            `json:"url"`
-	State      string            `json:"state"`
-	ReadyState string            `json:"readyState"`
-	Target     string            `json:"target"`
-	Created    int64             `json:"created"`
-	CreatedAt  msTime            `json:"createdAt"`
-	Ready      int64             `json:"ready"`
-	ReadyAt    msTime            `json:"readyAt"`
-	BuildingAt int64             `json:"buildingAt"`
+	UID        string `json:"uid"`
+	Name       string `json:"name"`
+	URL        string `json:"url"`
+	State      string `json:"state"`
+	ReadyState string `json:"readyState"`
+	Target     string `json:"target"`
+	Created    int64  `json:"created"`
+	CreatedAt  msTime `json:"createdAt"`
+	Ready      int64  `json:"ready"`
+	ReadyAt    msTime `json:"readyAt"`
+	BuildingAt int64  `json:"buildingAt"`
 	Creator    struct {
 		Username string `json:"username"`
 	} `json:"creator"`
-	Meta map[string]string `json:"meta"`
-	Alias []string         `json:"alias"`
+	Meta  map[string]string `json:"meta"`
+	Alias []string          `json:"alias"`
 }
 
 // Status normalizes the mixed-case states the API returns across versions.
