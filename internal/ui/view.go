@@ -191,7 +191,13 @@ func (m Model) logsView() string {
 		follow = dimStyle.Render(fmt.Sprintf("  scrolled (%d/%d)", m.logScroll, max(total-visible, 0)))
 	}
 	count := dimStyle.Render(fmt.Sprintf("  %d lines", total))
-	return head + count + follow + "\n" + strings.Join(m.logs[start:end], "\n") + "\n"
+	search := ""
+	if m.searchFocus {
+		search = "\n" + "/" + m.searchBuf + "█"
+	} else if m.search != "" {
+		search = "\n" + dimStyle.Render("search: "+m.search+"  (n next, / re-edit)")
+	}
+	return head + count + follow + search + "\n" + strings.Join(m.logs[start:end], "\n") + "\n"
 }
 
 func (m Model) loginView() string {
@@ -226,7 +232,8 @@ func (m Model) helpView() string {
 		"j k g G  navigate",
 		"enter    deployment detail (deployments) · scope to project (projects)",
 		"l        live logs of the selected deployment",
-		"/        free-text filter        s  cycle state filter",
+		"/        filter (lists) or log search   n  next match",
+		"c        copy deployment URL to clipboard",
 		"t        switch team             r  refresh now",
 		"o        open in browser         q  quit",
 		"?        close this overlay",
@@ -236,12 +243,18 @@ func (m Model) helpView() string {
 func (m Model) footer() string {
 	hints := map[mode]string{
 		modeLogin:       "type/paste token · enter save · o open browser · q quit",
-		modeDeployments: "j/k move · enter detail · l logs · / filter · s state · t team · o open · ? help · q quit",
+		modeDeployments: "j/k move · enter detail · l logs · / filter · s state · t team · c copy · o open · ? help · q quit",
 		modeProjects:    "j/k move · enter scope to project · / filter · t team · ? help · q quit",
-		modeDetail:      "esc back · l logs · o open · q quit",
-		modeLogs:        "j/k scroll · g/G top/bottom · esc back · q quit",
+		modeDetail:      "esc back · l logs · c copy url · o open · q quit",
 	}
+	modeLogsHints := "j/k scroll · / search · n next match · c copy url · esc back · q quit"
 	line := dimStyle.Render(hints[m.mode])
+	if m.mode == modeLogs {
+		line = dimStyle.Render(modeLogsHints)
+	}
+	if m.note != "" {
+		line = okStyle.Render(m.note)
+	}
 	if m.err != "" {
 		line = errStyle.Render(trunc(m.err, max(m.width-4, 20)))
 	}

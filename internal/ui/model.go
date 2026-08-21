@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -26,17 +27,17 @@ const (
 var stateFilters = []string{"", "building", "ready", "error", "canceled", "queued"}
 
 type Model struct {
-	client *api.Client
-	authed bool
+	client  *api.Client
+	authed  bool
 	refresh time.Duration
 
-	projectID, orgID   string
+	projectID, orgID       string
 	targetFlag, branchFlag string
 
-	mode      mode
-	user      string
-	teams     []api.Team // index 0 is the personal account
-	teamIdx   int
+	mode    mode
+	user    string
+	teams   []api.Team // index 0 is the personal account
+	teamIdx int
 
 	deps       []api.Deployment
 	depCursor  int
@@ -50,6 +51,13 @@ type Model struct {
 	filterBuf   string
 	filter      string
 	stateIdx    int
+
+	searchFocus bool
+	searchBuf   string
+	search      string
+	lastMatch   int
+	note        string
+	noteAt      time.Time
 
 	tokenBuf string
 
@@ -78,6 +86,7 @@ type tokenOkMsg struct {
 	user  string
 	token string
 }
+type statusMsg struct{ text string }
 type errMsg struct{ err error }
 
 func New(client *api.Client, authed bool, refresh time.Duration, link *config.ProjectLink, target, branch string) Model {
@@ -222,6 +231,26 @@ func openBrowser(url string) tea.Cmd {
 	}
 }
 
+var clipboardTools = [][]string{
+	{"wl-copy"},
+	{"xclip", "-selection", "clipboard"},
+	{"xsel", "--clipboard", "--input"},
+	{"pbcopy"},
+}
+
+func copyURL(url string) tea.Cmd {
+	return func() tea.Msg {
+		for _, bin := range clipboardTools {
+			cmd := exec.Command(bin[0], bin[1:]...)
+			cmd.Stdin = strings.NewReader(url)
+			if err := cmd.Run(); err == nil {
+				return statusMsg{"copied " + url}
+			}
+		}
+		return errMsg{errors.New("no clipboard tool found (wl-copy, xclip, xsel, pbcopy)")}
+	}
+}
+
 func (m Model) loadCurrent() tea.Cmd {
 	switch m.mode {
 	case modeDeployments:
@@ -255,6 +284,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 
 	case tickMsg:
+		if !m.noteAt.IsZero() && time.Since(m.noteAt) > 3*time.Second {
+			m.note = ""
+		}
 		var cmds []tea.Cmd
 		if m.authed && !m.loading {
 			if cmd := m.loadCurrent(); cmd != nil {
@@ -300,6 +332,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = modeDeployments
 		m.tokenBuf = ""
 		return m, tea.Batch(fetchTeams(m.client), m.fetchDeps())
+
+	case statusMsg:
+		m.note = msg.text
+		m.noteAt = time.Now()
 
 	case errMsg:
 		m.loading = false
@@ -358,6 +394,26 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.searchFocus {
+		switch key {
+		case "enter":
+			m.search, m.searchFocus = m.searchBuf, false
+			m.lastMatch = max(m.logTopIndex()-1, -1)
+			m.searchNext()
+		case "esc":
+			m.searchBuf, m.searchFocus = "", false
+		case "backspace":
+			if r := []rune(m.searchBuf); len(r) > 0 {
+				m.searchBuf = string(r[:len(r)-1])
+			}
+		default:
+			if len(key) == 1 {
+				m.searchBuf += key
+			}
+		}
+		return m, nil
+	}
+
 	if m.help {
 		m.help = false
 		return m, nil
@@ -406,8 +462,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		return m, m.loadCurrent()
 	case "/":
-		if m.mode == modeDeployments || m.mode == modeProjects {
+		switch m.mode {
+		case modeDeployments, modeProjects:
 			m.filterFocus, m.filterBuf = true, m.filter
+		case modeLogs:
+			m.searchFocus, m.searchBuf = true, m.search
 		}
 		return m, nil
 	case "s":
@@ -446,6 +505,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.depCursor < len(deps) {
 				return m, openBrowser("https://" + deps[m.depCursor].URL)
 			}
+		case "c":
+			if m.depCursor < len(deps) {
+				return m, copyURL("https://" + deps[m.depCursor].URL)
+			}
 		}
 
 	case modeProjects:
@@ -473,6 +536,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.fetchLogs()
 		case "o":
 			return m, openBrowser("https://" + m.detail.URL)
+		case "c":
+			return m, copyURL("https://" + m.detail.URL)
 		}
 
 	case modeLogs:
@@ -495,9 +560,49 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.logScroll = 0
 		case "g", "home":
 			m.logScroll = maxScroll
+		case "n":
+			m.searchNext()
+		case "c":
+			if m.detail != nil {
+				return m, copyURL("https://" + m.detail.URL)
+			}
 		}
 	}
 	return m, nil
+}
+
+// logTopIndex is the absolute index of the topmost visible log line.
+func (m Model) logTopIndex() int {
+	visible := max(m.height-6, 1)
+	start := len(m.logs) - visible - m.logScroll
+	if start < 0 {
+		return 0
+	}
+	return start
+}
+
+// searchNext jumps to the next line matching the search term, wrapping.
+func (m *Model) searchNext() {
+	if m.search == "" || len(m.logs) == 0 {
+		return
+	}
+	q := strings.ToLower(m.search)
+	total := len(m.logs)
+	visible := max(m.height-6, 1)
+	maxScroll := max(total-visible, 0)
+	from := m.lastMatch + 1
+	for i := 0; i < total; i++ {
+		idx := (from + i) % total
+		if strings.Contains(strings.ToLower(m.logs[idx]), q) {
+			m.lastMatch = idx
+			m.logScroll = clamp(total-visible-idx, 0, maxScroll)
+			m.note = fmt.Sprintf("match at line %d", idx+1)
+			m.noteAt = time.Now()
+			return
+		}
+	}
+	m.note = "no match"
+	m.noteAt = time.Now()
 }
 
 func (m Model) visibleDeps() []api.Deployment {
