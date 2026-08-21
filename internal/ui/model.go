@@ -22,9 +22,21 @@ const (
 	modeProjects
 	modeDetail
 	modeLogs
+	modeEnvs
+	modeDomains
 )
 
 var stateFilters = []string{"", "building", "ready", "error", "canceled", "queued"}
+
+var targetPresets = []struct {
+	label  string
+	values []string
+}{
+	{"production", []string{"production"}},
+	{"preview", []string{"preview"}},
+	{"development", []string{"development"}},
+	{"all", []string{"production", "preview", "development"}},
+}
 
 type Model struct {
 	client  *api.Client
@@ -47,6 +59,17 @@ type Model struct {
 	logs       []string
 	logScroll  int // lines back from the bottom; 0 means following
 
+	envProject api.Project
+	envs       []api.EnvVar
+	envCursor  int
+	envForm    bool
+	envKey     string
+	envValue   string
+	envField   int // 0 = key, 1 = value
+	envPreset  int
+	envEditID  string // non-empty while editing an existing var
+	domains    []api.Domain
+
 	filterFocus bool
 	filterBuf   string
 	filter      string
@@ -63,6 +86,7 @@ type Model struct {
 
 	pending      pendingAction
 	pendingDep   api.Deployment
+	pendingEnv   api.EnvVar
 	confirmInput string
 
 	teamSel    bool
@@ -95,6 +119,8 @@ type actionMsg struct {
 	text string
 	err  error
 }
+type envsMsg struct{ envs []api.EnvVar }
+type domainsMsg struct{ domains []api.Domain }
 type errMsg struct{ err error }
 
 type pendingAction int
@@ -105,6 +131,7 @@ const (
 	pendDelete
 	pendRedeploy
 	pendRollback
+	pendDeleteEnv
 )
 
 func New(client *api.Client, authed bool, refresh time.Duration, link *config.ProjectLink, target, branch string) Model {
@@ -225,6 +252,54 @@ func (m Model) fetchLogs() tea.Cmd {
 	}
 }
 
+func (m Model) fetchEnvs() tea.Cmd {
+	m.loading = true
+	c, team, project := m.client, m.teamID(), m.envProject.ID
+	return func() tea.Msg {
+		envs, err := c.EnvVars(project, team)
+		if err != nil {
+			return errMsg{err}
+		}
+		return envsMsg{envs}
+	}
+}
+
+func (m Model) fetchDomains() tea.Cmd {
+	m.loading = true
+	c, team, project := m.client, m.teamID(), m.projectID
+	return func() tea.Msg {
+		domains, err := c.ProjectDomains(project, team)
+		if err != nil {
+			domains, err = c.TeamDomains(team)
+			if err != nil {
+				return errMsg{err}
+			}
+		}
+		return domainsMsg{domains}
+	}
+}
+
+func (m Model) submitEnv() tea.Cmd {
+	c, team := m.client, m.teamID()
+	project := m.envProject.ID
+	key, value := m.envKey, m.envValue
+	targets := targetPresets[m.envPreset].values
+	editID := m.envEditID
+	return func() tea.Msg {
+		var err error
+		if editID != "" {
+			err = c.UpdateEnvValue(project, team, editID, value, targets)
+		} else {
+			err = c.CreateEnv(project, team, key, value, targets)
+		}
+		text := "env var saved"
+		if editID != "" {
+			text = "env var updated"
+		}
+		return actionMsg{text, err}
+	}
+}
+
 func validateToken(token string) tea.Cmd {
 	return func() tea.Msg {
 		u, err := api.New(token).User()
@@ -280,13 +355,22 @@ func (m Model) handleConfirm(key string) (tea.Model, tea.Cmd) {
 			m.confirmInput = string(r[:len(r)-1])
 		}
 	case "enter":
-		pa, dep := m.pending, m.pendingDep
-		if pa == pendDelete && m.confirmInput != dep.Name {
-			return m, nil // exact project name required
+		pa := m.pending
+		required := ""
+		if pa == pendDelete {
+			required = m.pendingDep.Name
+		} else if pa == pendDeleteEnv {
+			required = m.pendingEnv.Key
+		}
+		if required != "" && m.confirmInput != required {
+			return m, nil // exact name/key required
 		}
 		m.pending = pendNone
 		m.confirmInput = ""
-		return m, m.runAction(pa, dep)
+		if pa == pendDeleteEnv {
+			return m, m.runEnvDelete()
+		}
+		return m, m.runAction(pa, m.pendingDep)
 	default:
 		if len(key) == 1 && !m.confirmTyped() {
 			m.confirmInput += key
@@ -297,7 +381,17 @@ func (m Model) handleConfirm(key string) (tea.Model, tea.Cmd) {
 
 // confirmTyped reports whether the dialog wants free typing at all;
 // non-destructive confirms only take enter.
-func (m Model) confirmTyped() bool { return m.pending == pendDelete }
+func (m Model) confirmTyped() bool { return m.pending == pendDelete || m.pending == pendDeleteEnv }
+
+func (m Model) runEnvDelete() tea.Cmd {
+	c, team := m.client, m.teamID()
+	project, key := m.envProject.ID, m.pendingEnv.Key
+	id := m.pendingEnv.ID
+	return func() tea.Msg {
+		err := c.DeleteEnv(project, team, id)
+		return actionMsg{"deleted " + key, err}
+	}
+}
 
 func (m Model) runAction(pa pendingAction, dep api.Deployment) tea.Cmd {
 	c, team := m.client, m.teamID()
@@ -339,6 +433,10 @@ func (m Model) loadCurrent() tea.Cmd {
 		return m.fetchDeps()
 	case modeProjects:
 		return m.fetchProjects()
+	case modeEnvs:
+		return m.fetchEnvs()
+	case modeDomains:
+		return m.fetchDomains()
 	case modeLogs:
 		return m.fetchLogs()
 	}
@@ -397,6 +495,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading, m.throttled, m.err = false, false, ""
 		m.lastLoad = time.Now()
 		m.projCursor = clamp(m.projCursor, 0, max(len(m.projects)-1, 0))
+
+	case envsMsg:
+		m.envs = msg.envs
+		m.loading, m.throttled, m.err = false, false, ""
+		m.lastLoad = time.Now()
+		m.envCursor = clamp(m.envCursor, 0, max(len(m.envs)-1, 0))
+
+	case domainsMsg:
+		m.domains = msg.domains
+		m.loading, m.throttled, m.err = false, false, ""
+		m.lastLoad = time.Now()
 
 	case detailMsg:
 		m.detail = msg.d
@@ -490,6 +599,45 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleConfirm(key)
 	}
 
+	if m.envForm {
+		switch key {
+		case "esc":
+			m.envForm, m.envKey, m.envValue, m.envField, m.envEditID = false, "", "", 0, ""
+		case "tab":
+			if m.envEditID == "" {
+				m.envField = (m.envField + 1) % 2
+			}
+		case "t":
+			m.envPreset = (m.envPreset + 1) % len(targetPresets)
+		case "enter":
+			if m.envField == 0 && m.envEditID == "" {
+				if m.envKey != "" {
+					m.envField = 1
+				}
+			} else if m.envValue != "" {
+				m.envForm = false
+				return m, m.submitEnv()
+			}
+		case "backspace":
+			buf := &m.envKey
+			if m.envField == 1 || m.envEditID != "" {
+				buf = &m.envValue
+			}
+			if r := []rune(*buf); len(r) > 0 {
+				*buf = string(r[:len(r)-1])
+			}
+		default:
+			if len(key) == 1 {
+				if m.envField == 0 && m.envEditID == "" {
+					m.envKey += key
+				} else {
+					m.envValue += key
+				}
+			}
+		}
+		return m, nil
+	}
+
 	if m.searchFocus {
 		switch key {
 		case "enter":
@@ -542,6 +690,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+	case "3":
+		m.mode = modeDomains
+		return m, m.fetchDomains()
 	case "?":
 		m.help = true
 	case "1":
@@ -639,6 +790,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.depCursor = 0
 				return m, m.fetchDeps()
 			}
+		case "e":
+			if m.projCursor < len(m.projects) {
+				m.envProject = m.projects[m.projCursor]
+				m.mode = modeEnvs
+				m.envCursor = 0
+				return m, m.fetchEnvs()
+			}
 		}
 
 	case modeDetail:
@@ -666,6 +824,37 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.pending, m.pendingDep, m.confirmInput = pendRollback, *m.detail, ""
 			}
 		}
+
+	case modeEnvs:
+		switch key {
+		case "esc":
+			m.mode = modeProjects
+		case "j", "down":
+			m.envCursor = clamp(m.envCursor+1, 0, len(m.envs)-1)
+		case "k", "up":
+			m.envCursor = clamp(m.envCursor-1, 0, len(m.envs)-1)
+		case "n":
+			m.envForm, m.envKey, m.envValue, m.envField, m.envPreset, m.envEditID = true, "", "", 0, 0, ""
+		case "e":
+			if m.envCursor < len(m.envs) {
+				v := m.envs[m.envCursor]
+				m.envForm, m.envValue, m.envField, m.envEditID = true, "", 1, v.ID
+				if len(v.Target) == 1 {
+					for i, p := range targetPresets {
+						if p.label == v.Target[0] {
+							m.envPreset = i
+						}
+					}
+				}
+			}
+		case "d":
+			if m.envCursor < len(m.envs) {
+				m.pending, m.pendingEnv, m.confirmInput = pendDeleteEnv, m.envs[m.envCursor], ""
+			}
+		}
+
+	case modeDomains:
+		// read-only
 
 	case modeLogs:
 		maxScroll := max(len(m.logs)-(m.height-6), 0)

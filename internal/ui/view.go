@@ -37,6 +37,8 @@ func (m Model) View() string {
 	switch {
 	case m.help:
 		b.WriteString(m.helpView())
+	case m.envForm:
+		b.WriteString(m.envFormView())
 	case m.pending != pendNone:
 		b.WriteString(m.confirmView())
 	case m.teamSel:
@@ -53,6 +55,10 @@ func (m Model) View() string {
 			b.WriteString(m.detailView())
 		case modeLogs:
 			b.WriteString(m.logsView())
+		case modeEnvs:
+			b.WriteString(m.envVarsView())
+		case modeDomains:
+			b.WriteString(m.domainsView())
 		}
 	}
 
@@ -201,6 +207,90 @@ func (m Model) logsView() string {
 	return head + count + follow + search + "\n" + strings.Join(m.logs[start:end], "\n") + "\n"
 }
 
+func (m Model) envVarsView() string {
+	head := titleStyle.Render("env vars — " + m.envProject.Name)
+	if len(m.envs) == 0 {
+		return head + "\n" + dimStyle.Render("no environment variables (n to create)") + "\n"
+	}
+	rows := []string{headerStyle.Render(row("", "KEY", "TARGETS", "TYPE", "UPDATED"))}
+	maxRows := max(m.height-8, 1)
+	start := clamp(m.envCursor-maxRows+2, 0, max(len(m.envs)-maxRows, 0))
+	for i := start; i < min(start+maxRows, len(m.envs)); i++ {
+		e := m.envs[i]
+		targets := trunc(strings.Join(e.Target, ", "), 28)
+		if e.Sensitive() {
+			targets += dimStyle.Render(" ·write-only")
+		}
+		cells := []string{
+			marker(i == m.envCursor),
+			trunc(e.Key, 30),
+			targets,
+			e.Type,
+			relAge(int64(e.UpdatedAt)),
+		}
+		line := row(cells...)
+		if i == m.envCursor {
+			line = selectedStyle.Render(line)
+		}
+		rows = append(rows, line)
+	}
+	return head + "\n" + strings.Join(rows, "\n") + "\n"
+}
+
+func (m Model) envFormView() string {
+	editing := m.envEditID != ""
+	title := titleStyle.Render("New environment variable for " + m.envProject.Name)
+	if editing {
+		title = titleStyle.Render("Edit value of " + m.envKeyLabel() +
+			" on " + m.envProject.Name)
+	}
+	keyLine := marker(!editing && m.envField == 0) + " key:   " + m.envKey
+	valueLine := marker(editing || m.envField == 1) + " value: " + m.envValue
+	hint := ""
+	if editing {
+		keyLine = dimStyle.Render("  key:   " + m.envKeyLabel())
+		hint = dimStyle.Render("  (the stored value is not readable; type the new one)")
+	}
+	return strings.Join([]string{
+		title,
+		"",
+		keyLine,
+		valueLine + hint,
+		"targets: " + warnStyle.Render(targetPresets[m.envPreset].label) + dimStyle.Render("  (t cycles)"),
+		"",
+		dimStyle.Render("enter next/save · tab switch field · esc cancel"),
+	}, "\n") + "\n"
+}
+
+func (m Model) envKeyLabel() string {
+	for _, e := range m.envs {
+		if e.ID == m.envEditID {
+			return e.Key
+		}
+	}
+	return "?"
+}
+
+func (m Model) domainsView() string {
+	scope := "team domains"
+	if m.projectID != "" {
+		scope = "domains of scoped project"
+	}
+	head := titleStyle.Render("domains — " + scope)
+	if len(m.domains) == 0 {
+		return head + "\n" + dimStyle.Render("no domains") + "\n"
+	}
+	rows := []string{headerStyle.Render(row("NAME", "VERIFIED", "CREATED"))}
+	for _, d := range m.domains {
+		verified := okStyle.Render("yes")
+		if !d.Verified {
+			verified = errStyle.Render("NO")
+		}
+		rows = append(rows, row(trunc(d.Name, 40), verified, relAge(int64(d.CreatedAt))))
+	}
+	return head + "\n" + strings.Join(rows, "\n") + "\n"
+}
+
 func (m Model) loginView() string {
 	return strings.Join([]string{
 		titleStyle.Render("Login to Vercel"),
@@ -230,6 +320,10 @@ func (m Model) confirmView() string {
 		title = warnStyle.Render("Instant rollback — PRODUCTION")
 		body = "Promote " + m.pendingDep.ShortSHA() + " back to production?\n" +
 			"Traffic switches immediately. Enter to confirm, esc to abort."
+	case pendDeleteEnv:
+		title = errStyle.Render("Delete environment variable")
+		body = "Remove " + m.pendingEnv.Key + " from " + m.envProject.Name + "?\n" +
+			"Type \"" + m.pendingEnv.Key + "\" to confirm: " + m.confirmInput
 	}
 	return strings.Join([]string{
 		titleStyle.Render(title),
@@ -256,11 +350,12 @@ func (m Model) helpView() string {
 	return strings.Join([]string{
 		titleStyle.Render("Keys"),
 		"",
-		"1/2      deployments / projects",
+		"1/2/3    deployments / projects / domains",
 		"j k g G  navigate",
 		"enter    deployment detail (deployments) · scope to project (projects)",
 		"l        live logs of the selected deployment",
 		"/        filter (lists) or log search   n  next match",
+		"e        env vars of selected project",
 		"x        cancel building deployment      D  delete (typed confirm)",
 		"R        redeploy same commit            B  instant rollback (prod)",
 		"c        copy deployment URL to clipboard",
@@ -274,8 +369,10 @@ func (m Model) footer() string {
 	hints := map[mode]string{
 		modeLogin:       "type/paste token · enter save · o open browser · q quit",
 		modeDeployments: "j/k move · enter detail · l logs · x cancel · R redeploy · B rollback · D delete · / filter · s state · t team · c copy · o open · ? help · q quit",
-		modeProjects:    "j/k move · enter scope to project · / filter · t team · ? help · q quit",
+		modeProjects:    "j/k move · enter scope · e env vars · / filter · t team · ? help · q quit",
 		modeDetail:      "esc back · l logs · x cancel · R redeploy · B rollback · D delete · c copy url · o open · q quit",
+		modeEnvs:        "j/k move · n new · e edit value · d delete · esc back · q quit",
+		modeDomains:     "esc back · q quit",
 	}
 	modeLogsHints := "j/k scroll · / search · n next match · c copy url · esc back · q quit"
 	line := dimStyle.Render(hints[m.mode])
@@ -293,11 +390,18 @@ func (m Model) footer() string {
 
 var depWidths = []int{1, 19, 11, 10, 25, 9, 11, 10, 8}
 var projWidths = []int{1, 27, 17, 33, 12}
+var envWidths = []int{1, 31, 29, 11, 12}
+var domWidths = []int{41, 9, 12}
 
 func row(cells ...string) string {
 	widths := depWidths
-	if len(cells) == len(projWidths) {
+	switch len(cells) {
+	case len(projWidths):
 		widths = projWidths
+	case len(envWidths):
+		widths = envWidths
+	case len(domWidths):
+		widths = domWidths
 	}
 	var b strings.Builder
 	for i, c := range cells {
