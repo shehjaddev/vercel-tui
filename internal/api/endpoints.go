@@ -12,7 +12,7 @@ import (
 func (c *Client) Deployments(projectID, teamID, target string, limit int) ([]Deployment, error) {
 	q := url.Values{"limit": {strconv.Itoa(limit)}}
 	if projectID != "" {
-		q.Set("project", projectID)
+		q.Set("projectId", projectID)
 	}
 	if target != "" {
 		q.Set("target", target)

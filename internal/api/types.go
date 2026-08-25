@@ -10,6 +10,7 @@ import (
 // Unknown JSON fields are ignored, so additive API changes never break us.
 type Deployment struct {
 	UID        string `json:"uid"`
+	ID         string `json:"id"` // create/detail responses use id, lists use uid
 	Name       string `json:"name"`
 	URL        string `json:"url"`
 	State      string `json:"state"`
@@ -25,6 +26,14 @@ type Deployment struct {
 	} `json:"creator"`
 	Meta  map[string]string `json:"meta"`
 	Alias []string          `json:"alias"`
+}
+
+// Key returns whichever deployment identifier the response carried.
+func (d Deployment) Key() string {
+	if d.UID != "" {
+		return d.UID
+	}
+	return d.ID
 }
 
 // Status normalizes the mixed-case states the API returns across versions.
