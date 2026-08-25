@@ -368,14 +368,34 @@ func (m Model) helpView() string {
 func (m Model) footer() string {
 	hints := map[mode]string{
 		modeLogin:       "type/paste token · enter save · o open browser · q quit",
-		modeDeployments: "j/k move · enter detail · l logs · x cancel · R redeploy · B rollback · D delete · / filter · s state · t team · c copy · o open · ? help · q quit",
+		modeDeployments: "j/k move · enter detail · l logs · R redeploy · D delete · / filter · s state · t team · c copy · o open · ? help · q quit",
 		modeProjects:    "j/k move · enter scope · e env vars · / filter · t team · ? help · q quit",
-		modeDetail:      "esc back · l logs · x cancel · R redeploy · B rollback · D delete · c copy url · o open · q quit",
+		modeDetail:      "esc back · l logs · R redeploy · D delete · c copy url · o open · q quit",
 		modeEnvs:        "j/k move · n new · e edit value · d delete · esc back · q quit",
 		modeDomains:     "esc back · q quit",
 	}
 	modeLogsHints := "j/k scroll · / search · n next match · c copy url · esc back · q quit"
-	line := dimStyle.Render(hints[m.mode])
+	hint := hints[m.mode]
+	// context-dependent actions only advertise when they can fire
+	addHint := func(k, label string) { hint += " · " + k + " " + label }
+	if m.mode == modeDeployments && m.depCursor < len(m.visibleDeps()) {
+		d := m.visibleDeps()[m.depCursor]
+		if d.Status() == "building" {
+			addHint("x", "cancel")
+		}
+		if d.Status() == "ready" && d.Target == "production" {
+			addHint("B", "rollback")
+		}
+	}
+	if m.mode == modeDetail && m.detail != nil {
+		if m.detail.Status() == "building" {
+			addHint("x", "cancel")
+		}
+		if m.detail.Status() == "ready" && m.detail.Target == "production" {
+			addHint("B", "rollback")
+		}
+	}
+	line := dimStyle.Render(hint)
 	if m.mode == modeLogs {
 		line = dimStyle.Render(modeLogsHints)
 	}
