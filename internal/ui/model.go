@@ -409,6 +409,7 @@ func (m Model) runAction(pa pendingAction, dep api.Deployment) tea.Cmd {
 		}
 	case pendRedeploy:
 		name := dep.Name
+		target := dep.Target // keep production redeploys in production
 		return func() tea.Msg {
 			var git *api.GitSource
 			if ref := dep.Branch(); ref != "" {
@@ -420,7 +421,7 @@ func (m Model) runAction(pa pendingAction, dep api.Deployment) tea.Cmd {
 					git = &api.GitSource{Type: strings.ToLower(p.Link.Type), Org: p.Link.Org, Repo: p.Link.Repo, Ref: ref}
 				}
 			}
-			_, err := c.Redeploy(name, id, team, git)
+			_, err := c.Redeploy(name, id, team, git, target)
 			return actionMsg{"redeploy of " + name + " started", err}
 		}
 	case pendRollback:

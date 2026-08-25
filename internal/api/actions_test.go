@@ -27,7 +27,7 @@ func TestRequestMethodsAndBody(t *testing.T) {
 	c := New("tok")
 	c.baseURL = srv.URL
 
-	d, err := c.Redeploy("web", "dpl_old", "", nil)
+	d, err := c.Redeploy("web", "dpl_old", "", nil, "")
 	if err != nil || d.UID != "dpl_new" {
 		t.Fatalf("Redeploy: %v %+v", err, d)
 	}
@@ -47,7 +47,7 @@ func TestRequestMethodsAndBody(t *testing.T) {
 
 	c.baseURL = srv.URL
 	git := &GitSource{Type: "github", Org: "shehjaddev", Repo: "web", Ref: "main"}
-	if _, err := c.Redeploy("web", "dpl_old", "", git); err != nil {
+	if _, err := c.Redeploy("web", "dpl_old", "", git, "production"); err != nil {
 		t.Fatal(err)
 	}
 	var body2 map[string]any

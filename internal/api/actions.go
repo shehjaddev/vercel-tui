@@ -28,11 +28,15 @@ type GitSource struct {
 
 // Redeploy rebuilds the same git commit as an existing deployment.
 // Git-connected projects require the full gitSource; pass nil for
-// deployments without git metadata.
-func (c *Client) Redeploy(name, deploymentID, teamID string, git *GitSource) (*Deployment, error) {
+// deployments without git metadata. Pass target="production" to keep
+// a production redeploy in production (API defaults to preview).
+func (c *Client) Redeploy(name, deploymentID, teamID string, git *GitSource, target string) (*Deployment, error) {
 	body := map[string]any{"name": name, "deploymentId": deploymentID}
 	if git != nil {
 		body["gitSource"] = git
+	}
+	if target != "" {
+		body["target"] = target
 	}
 	var d Deployment
 	if err := c.request("POST", "/v13/deployments", scoped(url.Values{}, teamID), body, &d); err != nil {
