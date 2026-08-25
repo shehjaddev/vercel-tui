@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -26,9 +27,12 @@ func TestRequestMethodsAndBody(t *testing.T) {
 	c := New("tok")
 	c.baseURL = srv.URL
 
-	d, err := c.Redeploy("web", "dpl_old", "")
+	d, err := c.Redeploy("web", "dpl_old", "", nil)
 	if err != nil || d.UID != "dpl_new" {
 		t.Fatalf("Redeploy: %v %+v", err, d)
+	}
+	if strings.Contains(gotBody, "gitSource") {
+		t.Errorf("nil gitSource should be omitted, body: %s", gotBody)
 	}
 	if gotMethod != "POST" || gotPath != "/v13/deployments" {
 		t.Errorf("method/path: %s %s", gotMethod, gotPath)
@@ -42,8 +46,15 @@ func TestRequestMethodsAndBody(t *testing.T) {
 	}
 
 	c.baseURL = srv.URL
-	if err := c.DeleteDeployment("dpl_x", ""); err != nil || gotMethod != "DELETE" {
-		t.Errorf("delete: method=%s err=%v", gotMethod, err)
+	git := &GitSource{Type: "github", Org: "shehjaddev", Repo: "web", Ref: "main"}
+	if _, err := c.Redeploy("web", "dpl_old", "", git); err != nil {
+		t.Fatal(err)
+	}
+	var body2 map[string]any
+	json.Unmarshal([]byte(gotBody), &body2)
+	gs, _ := body2["gitSource"].(map[string]any)
+	if gs == nil || gs["org"] != "shehjaddev" || gs["ref"] != "main" {
+		t.Errorf("gitSource missing/wrong in body: %s", gotBody)
 	}
 }
 

@@ -18,9 +18,22 @@ func (c *Client) DeleteDeployment(id, teamID string) error {
 	return c.request("DELETE", "/v13/deployments/"+id, scoped(url.Values{}, teamID), nil, nil)
 }
 
+// GitSource identifies a git-connected repo for redeployments.
+type GitSource struct {
+	Type string `json:"type"`
+	Org  string `json:"org"`
+	Repo string `json:"repo"`
+	Ref  string `json:"ref"`
+}
+
 // Redeploy rebuilds the same git commit as an existing deployment.
-func (c *Client) Redeploy(name, deploymentID, teamID string) (*Deployment, error) {
+// Git-connected projects require the full gitSource; pass nil for
+// deployments without git metadata.
+func (c *Client) Redeploy(name, deploymentID, teamID string, git *GitSource) (*Deployment, error) {
 	body := map[string]any{"name": name, "deploymentId": deploymentID}
+	if git != nil {
+		body["gitSource"] = git
+	}
 	var d Deployment
 	if err := c.request("POST", "/v13/deployments", scoped(url.Values{}, teamID), body, &d); err != nil {
 		return nil, err
