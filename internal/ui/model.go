@@ -372,7 +372,7 @@ func (m Model) handleConfirm(key string) (tea.Model, tea.Cmd) {
 		}
 		return m, m.runAction(pa, m.pendingDep)
 	default:
-		if len(key) == 1 && !m.confirmTyped() {
+		if len(key) == 1 {
 			m.confirmInput += key
 		}
 	}
@@ -410,7 +410,17 @@ func (m Model) runAction(pa pendingAction, dep api.Deployment) tea.Cmd {
 	case pendRedeploy:
 		name := dep.Name
 		return func() tea.Msg {
-			_, err := c.Redeploy(name, id, team)
+			var git *api.GitSource
+			if ref := dep.Branch(); ref != "" {
+				p, err := c.ProjectByName(name, team)
+				if err != nil {
+					return actionMsg{"", err}
+				}
+				if p.Link.Repo != "" {
+					git = &api.GitSource{Type: strings.ToLower(p.Link.Type), Org: p.Link.Org, Repo: p.Link.Repo, Ref: ref}
+				}
+			}
+			_, err := c.Redeploy(name, id, team, git)
 			return actionMsg{"redeploy of " + name + " started", err}
 		}
 	case pendRollback:
@@ -486,34 +496,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case depsMsg:
 		m.deps = msg.deps
-		m.loading, m.throttled, m.err = false, false, ""
+		m.loading, m.throttled = false, false
 		m.lastLoad = time.Now()
 		m.depCursor = clamp(m.depCursor, 0, max(len(m.visibleDeps())-1, 0))
 
 	case projectsMsg:
 		m.projects = msg.projects
-		m.loading, m.throttled, m.err = false, false, ""
+		m.loading, m.throttled = false, false
 		m.lastLoad = time.Now()
 		m.projCursor = clamp(m.projCursor, 0, max(len(m.projects)-1, 0))
 
 	case envsMsg:
 		m.envs = msg.envs
-		m.loading, m.throttled, m.err = false, false, ""
+		m.loading, m.throttled = false, false
 		m.lastLoad = time.Now()
 		m.envCursor = clamp(m.envCursor, 0, max(len(m.envs)-1, 0))
 
 	case domainsMsg:
 		m.domains = msg.domains
-		m.loading, m.throttled, m.err = false, false, ""
+		m.loading, m.throttled = false, false
 		m.lastLoad = time.Now()
 
 	case detailMsg:
 		m.detail = msg.d
-		m.loading, m.throttled, m.err = false, false, ""
+		m.loading, m.throttled = false, false
+		if m.mode == modeDeployments {
+			m.mode = modeDetail
+		}
 
 	case logsMsg:
 		m.logs = msg.lines
-		m.loading, m.throttled, m.err = false, false, ""
+		m.loading, m.throttled = false, false
 
 	case tokenOkMsg:
 		m.client = api.New(msg.token)
@@ -554,6 +567,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+	m.err = "" // any keypress dismisses an action error
 
 	if m.mode == modeLogin {
 		switch key {
