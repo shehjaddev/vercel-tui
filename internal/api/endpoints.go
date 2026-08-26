@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 )
@@ -37,14 +37,9 @@ func (c *Client) Deployment(id, teamID string) (*Deployment, error) {
 // Events returns build log events for a deployment, oldest first.
 func (c *Client) Events(id, teamID string) ([]Event, error) {
 	q := url.Values{"limit": {"1000"}, "builds": {"1"}, "direction": {"forward"}}
-	path := "/v2/deployments/" + id + "/events?" + scoped(q, teamID).Encode()
-	req := c.baseURL + path
-	body, status, err := c.getRaw(req)
+	body, err := c.do(http.MethodGet, c.baseURL+withQuery("/v2/deployments/"+id+"/events", scoped(q, teamID)), nil)
 	if err != nil {
 		return nil, err
-	}
-	if status >= 400 {
-		return nil, fmt.Errorf("GET %s: %d", path, status)
 	}
 	return parseEvents(body)
 }

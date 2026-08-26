@@ -114,10 +114,10 @@ type tokenOkMsg struct {
 	user  string
 	token string
 }
-type statusMsg struct{ text string }
 type actionMsg struct {
-	text string
-	err  error
+	text   string
+	err    error
+	reload bool // whether success should trigger a data refresh
 }
 type envsMsg struct{ envs []api.EnvVar }
 type domainsMsg struct{ domains []api.Domain }
@@ -296,7 +296,7 @@ func (m Model) submitEnv() tea.Cmd {
 		if editID != "" {
 			text = "env var updated"
 		}
-		return actionMsg{text, err}
+		return actionMsg{text: text, err: err, reload: true}
 	}
 }
 
@@ -337,7 +337,7 @@ func copyURL(url string) tea.Cmd {
 			cmd := exec.Command(bin[0], bin[1:]...)
 			cmd.Stdin = strings.NewReader(url)
 			if err := cmd.Run(); err == nil {
-				return statusMsg{"copied " + url}
+				return actionMsg{text: "copied " + url}
 			}
 		}
 		return errMsg{errors.New("no clipboard tool found (wl-copy, xclip, xsel, pbcopy)")}
@@ -379,17 +379,13 @@ func (m Model) handleConfirm(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// confirmTyped reports whether the dialog wants free typing at all;
-// non-destructive confirms only take enter.
-func (m Model) confirmTyped() bool { return m.pending == pendDelete || m.pending == pendDeleteEnv }
-
 func (m Model) runEnvDelete() tea.Cmd {
 	c, team := m.client, m.teamID()
 	project, key := m.envProject.ID, m.pendingEnv.Key
 	id := m.pendingEnv.ID
 	return func() tea.Msg {
 		err := c.DeleteEnv(project, team, id)
-		return actionMsg{"deleted " + key, err}
+		return actionMsg{text: "deleted " + key, err: err, reload: true}
 	}
 }
 
@@ -400,12 +396,12 @@ func (m Model) runAction(pa pendingAction, dep api.Deployment) tea.Cmd {
 	case pendCancel:
 		return func() tea.Msg {
 			_, err := c.CancelDeployment(id, team)
-			return actionMsg{"build canceled", err}
+			return actionMsg{text: "build canceled", err: err, reload: true}
 		}
 	case pendDelete:
 		return func() tea.Msg {
 			err := c.DeleteDeployment(id, team)
-			return actionMsg{"deployment deleted", err}
+			return actionMsg{text: "deployment deleted", err: err, reload: true}
 		}
 	case pendRedeploy:
 		name := dep.Name
@@ -415,24 +411,24 @@ func (m Model) runAction(pa pendingAction, dep api.Deployment) tea.Cmd {
 			if ref := dep.Branch(); ref != "" {
 				p, err := c.ProjectByName(name, team)
 				if err != nil {
-					return actionMsg{"", err}
+					return errMsg{err}
 				}
 				if p.Link.Repo != "" {
 					git = &api.GitSource{Type: strings.ToLower(p.Link.Type), Org: p.Link.Org, Repo: p.Link.Repo, Ref: ref}
 				}
 			}
 			_, err := c.Redeploy(name, id, team, git, target)
-			return actionMsg{"redeploy of " + name + " started", err}
+			return actionMsg{text: "redeploy of " + name + " started", err: err, reload: true}
 		}
 	case pendRollback:
 		name := dep.Name
 		return func() tea.Msg {
 			p, err := c.ProjectByName(name, team)
 			if err != nil {
-				return actionMsg{"", err}
+				return errMsg{err}
 			}
 			err = c.Promote(p.ID, id, team)
-			return actionMsg{"promoting " + id + " to production", err}
+			return actionMsg{text: "promoting " + id + " to production", err: err, reload: true}
 		}
 	}
 	return nil
@@ -538,17 +534,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tokenBuf = ""
 		return m, tea.Batch(fetchTeams(m.client), m.fetchDeps())
 
-	case statusMsg:
-		m.note = msg.text
-		m.noteAt = time.Now()
-
 	case actionMsg:
 		m.loading = false
 		if msg.err != nil {
-			m.err = msg.err.Error()
-		} else {
-			m.note, m.noteAt = msg.text, time.Now()
-			m.err = ""
+			if errors.Is(msg.err, api.ErrThrottled) {
+				m.throttled = true
+			} else {
+				m.err = msg.err.Error()
+			}
+			return m, m.loadCurrent()
+		}
+		m.note, m.noteAt = msg.text, time.Now()
+		if !msg.reload {
+			return m, nil
 		}
 		return m, m.loadCurrent()
 

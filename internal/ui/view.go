@@ -103,7 +103,7 @@ func (m Model) deploymentsView() string {
 	if len(deps) == 0 {
 		return dimStyle.Render("no deployments match") + "\n"
 	}
-	rows := []string{headerStyle.Render(row("", "PROJECT", "TARGET", "STATE", "BRANCH", "COMMIT", "AUTHOR", "AGE", "DURATION"))}
+	rows := []string{headerStyle.Render(row(depWidths, "", "PROJECT", "TARGET", "STATE", "BRANCH", "COMMIT", "AUTHOR", "AGE", "DURATION"))}
 	maxRows := max(m.height-8, 1)
 	start := clamp(m.depCursor-maxRows+2, 0, max(len(deps)-maxRows, 0))
 	for i := start; i < min(start+maxRows, len(deps)); i++ {
@@ -120,7 +120,7 @@ func (m Model) deploymentsView() string {
 			relAge(d.CreatedMs()),
 			duration(d.Duration()),
 		}
-		line := row(cells...)
+		line := row(depWidths, cells...)
 		if i == m.depCursor {
 			line = selectedStyle.Render(line)
 		}
@@ -133,7 +133,7 @@ func (m Model) projectsView() string {
 	if len(m.projects) == 0 {
 		return dimStyle.Render("no projects") + "\n"
 	}
-	rows := []string{headerStyle.Render(row("", "PROJECT", "FRAMEWORK", "REPO", "LAST ACTIVITY"))}
+	rows := []string{headerStyle.Render(row(projWidths, "", "PROJECT", "FRAMEWORK", "REPO", "LAST ACTIVITY"))}
 	maxRows := max(m.height-8, 1)
 	start := clamp(m.projCursor-maxRows+2, 0, max(len(m.projects)-maxRows, 0))
 	for i := start; i < min(start+maxRows, len(m.projects)); i++ {
@@ -145,7 +145,7 @@ func (m Model) projectsView() string {
 			trunc(p.Repo(), 32),
 			relAge(p.UpdatedAt),
 		}
-		line := row(cells...)
+		line := row(projWidths, cells...)
 		if i == m.projCursor {
 			line = selectedStyle.Render(line)
 		}
@@ -212,7 +212,7 @@ func (m Model) envVarsView() string {
 	if len(m.envs) == 0 {
 		return head + "\n" + dimStyle.Render("no environment variables (n to create)") + "\n"
 	}
-	rows := []string{headerStyle.Render(row("", "KEY", "TARGETS", "TYPE", "UPDATED"))}
+	rows := []string{headerStyle.Render(row(envWidths, "", "KEY", "TARGETS", "TYPE", "UPDATED"))}
 	maxRows := max(m.height-8, 1)
 	start := clamp(m.envCursor-maxRows+2, 0, max(len(m.envs)-maxRows, 0))
 	for i := start; i < min(start+maxRows, len(m.envs)); i++ {
@@ -228,7 +228,7 @@ func (m Model) envVarsView() string {
 			e.Type,
 			relAge(int64(e.UpdatedAt)),
 		}
-		line := row(cells...)
+		line := row(envWidths, cells...)
 		if i == m.envCursor {
 			line = selectedStyle.Render(line)
 		}
@@ -280,13 +280,13 @@ func (m Model) domainsView() string {
 	if len(m.domains) == 0 {
 		return head + "\n" + dimStyle.Render("no domains") + "\n"
 	}
-	rows := []string{headerStyle.Render(row("NAME", "VERIFIED", "CREATED"))}
+	rows := []string{headerStyle.Render(row(domWidths, "NAME", "VERIFIED", "CREATED"))}
 	for _, d := range m.domains {
 		verified := okStyle.Render("yes")
 		if !d.Verified {
 			verified = errStyle.Render("NO")
 		}
-		rows = append(rows, row(trunc(d.Name, 40), verified, relAge(int64(d.CreatedAt))))
+		rows = append(rows, row(domWidths, trunc(d.Name, 40), verified, relAge(int64(d.CreatedAt))))
 	}
 	return head + "\n" + strings.Join(rows, "\n") + "\n"
 }
@@ -413,16 +413,7 @@ var projWidths = []int{1, 27, 17, 33, 12}
 var envWidths = []int{1, 31, 29, 11, 12}
 var domWidths = []int{41, 9, 12}
 
-func row(cells ...string) string {
-	widths := depWidths
-	switch len(cells) {
-	case len(projWidths):
-		widths = projWidths
-	case len(envWidths):
-		widths = envWidths
-	case len(domWidths):
-		widths = domWidths
-	}
+func row(widths []int, cells ...string) string {
 	var b strings.Builder
 	for i, c := range cells {
 		w := widths[min(i, len(widths)-1)]

@@ -31,19 +31,23 @@ func New(token string) *Client {
 	}
 }
 
+// withQuery appends "?query" only when there is one.
+func withQuery(path string, q url.Values) string {
+	if enc := q.Encode(); enc != "" {
+		return path + "?" + enc
+	}
+	return path
+}
+
 func (c *Client) get(path string, query url.Values, out any) error {
-	body, status, err := c.getRaw(c.baseURL + path + "?" + query.Encode())
+	body, err := c.do(http.MethodGet, c.baseURL+withQuery(path, query), nil)
 	if err != nil {
 		return err
-	}
-	if status >= 400 {
-		return fmt.Errorf("GET %s: %d %s", path, status, strings.TrimSpace(string(body)))
 	}
 	return json.Unmarshal(body, out)
 }
 
-// request performs a write call (POST/PATCH/DELETE) with an optional
-// JSON body, sharing the 429 backoff with reads.
+// request performs a write call with an optional JSON body.
 func (c *Client) request(method, path string, query url.Values, body any, out any) error {
 	var payload []byte
 	if body != nil {
@@ -53,42 +57,53 @@ func (c *Client) request(method, path string, query url.Values, body any, out an
 		}
 		payload = b
 	}
-	var lastBody []byte
+	bodyBytes, err := c.do(method, c.baseURL+withQuery(path, query), payload)
+	if err != nil {
+		return err
+	}
+	if out != nil && len(bodyBytes) > 0 {
+		return json.Unmarshal(bodyBytes, out)
+	}
+	return nil
+}
+
+// do performs a request with 429 backoff and returns the raw response
+// body. Non-2xx responses become errors.
+func (c *Client) do(method, fullURL string, payload []byte) ([]byte, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Duration(1<<uint(attempt-1)) * time.Second)
 		}
-		req, err := http.NewRequest(method, c.baseURL+path+"?"+query.Encode(), bytes.NewReader(payload))
+		req, err := http.NewRequest(method, fullURL, bytes.NewReader(payload))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		req.Header.Set("Authorization", "Bearer "+c.token)
-		if body != nil {
+		if len(payload) > 0 {
 			req.Header.Set("Content-Type", "application/json")
 		}
 		resp, err := c.http.Do(req)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		limit := int64(32 << 20)
+		if method != http.MethodGet {
+			limit = 1 << 20
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, limit))
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusTooManyRequests {
-			lastBody = bodyBytes
 			continue
 		}
 		if resp.StatusCode >= 400 {
-			return apiError(method, path, resp.StatusCode, bodyBytes)
+			return nil, apiError(method, fullURL, resp.StatusCode, body)
 		}
-		if out != nil && len(bodyBytes) > 0 {
-			return json.Unmarshal(bodyBytes, out)
-		}
-		return nil
+		return body, nil
 	}
-	_ = lastBody
-	return ErrThrottled
+	return nil, ErrThrottled
 }
 
-func apiError(method, path string, status int, body []byte) error {
+func apiError(method, url string, status int, body []byte) error {
 	var e struct {
 		Error struct {
 			Message string `json:"message"`
@@ -98,34 +113,20 @@ func apiError(method, path string, status int, body []byte) error {
 	if json.Unmarshal(body, &e) == nil && e.Error.Message != "" {
 		msg = e.Error.Message
 	}
-	return fmt.Errorf("%s %s: %d %s", method, path, status, msg)
+	return fmt.Errorf("%s %s: %d %s", method, urlPath(url), status, msg)
 }
 
-// getRaw performs the GET with 429 backoff and returns the raw body.
-func (c *Client) getRaw(url string) ([]byte, int, error) {
-	var lastBody []byte
-	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			time.Sleep(time.Duration(1<<uint(attempt-1)) * time.Second)
+// urlPath strips scheme and host so error messages read like "GET /v6/...".
+func urlPath(full string) string {
+	for _, scheme := range []string{"https://", "http://"} {
+		if rest, ok := strings.CutPrefix(full, scheme); ok {
+			if i := strings.Index(rest, "/"); i >= 0 {
+				return rest[i:]
+			}
+			return "/"
 		}
-		req, err := http.NewRequest(http.MethodGet, url, nil)
-		if err != nil {
-			return nil, 0, err
-		}
-		req.Header.Set("Authorization", "Bearer "+c.token)
-		resp, err := c.http.Do(req)
-		if err != nil {
-			return nil, 0, err
-		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
-		resp.Body.Close()
-		if resp.StatusCode == http.StatusTooManyRequests {
-			lastBody = body
-			continue
-		}
-		return body, resp.StatusCode, nil
 	}
-	return lastBody, http.StatusTooManyRequests, ErrThrottled
+	return full
 }
 
 func scoped(q url.Values, teamID string) url.Values {
