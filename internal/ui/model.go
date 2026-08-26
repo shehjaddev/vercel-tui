@@ -1021,6 +1021,31 @@ func (m Model) displayRows() []displayRow {
 	return rows
 }
 
+// projectGroups returns visible deployments grouped by project, newest
+// group first (matching display order). Each group keeps its deployments
+// newest-first.
+type projectGroup struct {
+	name        string
+	deployments []api.Deployment
+}
+
+func (m Model) projectGroups() []projectGroup {
+	deps := m.visibleDeps()
+	var order []string
+	byProj := map[string][]api.Deployment{}
+	for _, d := range deps {
+		if byProj[d.Name] == nil {
+			order = append(order, d.Name)
+		}
+		byProj[d.Name] = append(byProj[d.Name], d)
+	}
+	groups := make([]projectGroup, 0, len(order))
+	for _, name := range order {
+		groups = append(groups, projectGroup{name: name, deployments: byProj[name]})
+	}
+	return groups
+}
+
 // selectedDep returns the deployment at the cursor, or nil if the cursor
 // is on a project head row.
 func (m Model) selectedDep() *api.Deployment {
