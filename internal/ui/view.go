@@ -123,7 +123,11 @@ func (m Model) deploymentsView() string {
 			state, target, branch, sha, author, age, dur := "", "", "", "", "", "", ""
 			if d != nil {
 				st := d.Status()
-				state = stateStyle[st].Render(st)
+				if i == m.depCursor {
+					state = st // selected row: inherit row highlight uniformly
+				} else {
+					state = stateStyle[st].Render(st)
+				}
 				target = targetLabel(d.Target)
 				branch = d.Branch()
 				sha = d.ShortSHA()
@@ -145,11 +149,15 @@ func (m Model) deploymentsView() string {
 		} else if r.dep != nil {
 			d := *r.dep
 			st := d.Status()
+			stateCell := stateStyle[st].Render(trunc(st, widths[3]))
+			if i == m.depCursor {
+				stateCell = trunc(st, widths[3]) // selected row: inherit row highlight
+			}
 			cells = []string{
 				marker(i == m.depCursor),
 				projectCell,
 				trunc(targetLabel(d.Target), widths[2]),
-				stateStyle[st].Render(trunc(st, widths[3])),
+				stateCell,
 				trunc(d.Branch(), widths[4]),
 				trunc(d.ShortSHA(), widths[5]),
 				trunc(d.Creator.Username, widths[6]),
