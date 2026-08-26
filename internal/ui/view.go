@@ -418,9 +418,18 @@ func row(widths []int, cells ...string) string {
 	var b strings.Builder
 	for i, c := range cells {
 		w := widths[min(i, len(widths)-1)]
-		b.WriteString(fmt.Sprintf("%-*s", w, c))
+		b.WriteString(pad(c, w))
 	}
 	return strings.TrimRight(b.String(), " ")
+}
+
+// pad right-aligns to a visible width, ignoring ANSI escape codes.
+func pad(s string, w int) string {
+	visible := lipgloss.Width(s) // strips ANSI so color escapes don't inflate width
+	if visible >= w {
+		return s
+	}
+	return s + strings.Repeat(" ", w-visible)
 }
 
 func marker(selected bool) string {
