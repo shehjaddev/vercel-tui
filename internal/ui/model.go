@@ -53,6 +53,8 @@ type Model struct {
 
 	deps       []api.Deployment
 	depCursor  int
+	grouped    bool   // default: one row per project, expandable
+	expanded   string // project name currently expanded ("" = none)
 	projects   []api.Project
 	projCursor int
 	detail     *api.Deployment
@@ -147,6 +149,7 @@ func New(client *api.Client, authed bool, refresh time.Duration, link *config.Pr
 		m.projectID = link.ProjectID
 		m.orgID = link.OrgID
 	}
+	m.grouped = true
 	if !authed {
 		m.mode = modeLogin
 	}
@@ -495,7 +498,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.deps = msg.deps
 		m.loading, m.throttled = false, false
 		m.lastLoad = time.Now()
-		m.depCursor = clamp(m.depCursor, 0, max(len(m.visibleDeps())-1, 0))
+		m.depCursor = clamp(m.depCursor, 0, max(len(m.displayRows())-1, 0))
 
 	case projectsMsg:
 		m.projects = msg.projects
@@ -739,54 +742,63 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch m.mode {
 	case modeDeployments:
-		deps := m.visibleDeps()
+		rows := m.displayRows()
 		switch key {
 		case "j", "down":
-			m.depCursor = clamp(m.depCursor+1, 0, len(deps)-1)
+			m.depCursor = clamp(m.depCursor+1, 0, len(rows)-1)
 		case "k", "up":
-			m.depCursor = clamp(m.depCursor-1, 0, len(deps)-1)
+			m.depCursor = clamp(m.depCursor-1, 0, len(rows)-1)
 		case "g", "home":
 			m.depCursor = 0
 		case "G", "end":
-			m.depCursor = len(deps) - 1
+			m.depCursor = len(rows) - 1
 		case "enter":
-			if m.depCursor < len(deps) {
-				return m, m.fetchDetail(deps[m.depCursor])
+			if d := m.selectedDep(); d != nil {
+				return m, m.fetchDetail(*d)
 			}
+		case "e":
+			if m.depCursor < len(rows) && rows[m.depCursor].project != "" {
+				if m.expanded == rows[m.depCursor].project {
+					m.expanded = ""
+				} else {
+					m.expanded = rows[m.depCursor].project
+				}
+				return m, nil
+			}
+		case "a":
+			m.grouped = !m.grouped
+			m.depCursor = 0
+			m.expanded = ""
 		case "x":
-			if m.depCursor < len(deps) && deps[m.depCursor].Status() == "building" {
-				m.pending, m.pendingDep, m.confirmInput = pendCancel, deps[m.depCursor], ""
+			if d := m.selectedDep(); d != nil && d.Status() == "building" {
+				m.pending, m.pendingDep, m.confirmInput = pendCancel, *d, ""
 			}
 		case "D":
-			if m.depCursor < len(deps) {
-				m.pending, m.pendingDep, m.confirmInput = pendDelete, deps[m.depCursor], ""
+			if d := m.selectedDep(); d != nil {
+				m.pending, m.pendingDep, m.confirmInput = pendDelete, *d, ""
 			}
 		case "R":
-			if m.depCursor < len(deps) {
-				m.pending, m.pendingDep, m.confirmInput = pendRedeploy, deps[m.depCursor], ""
+			if d := m.selectedDep(); d != nil {
+				m.pending, m.pendingDep, m.confirmInput = pendRedeploy, *d, ""
 			}
 		case "B":
-			if m.depCursor < len(deps) {
-				d := deps[m.depCursor]
-				if d.Status() == "ready" && d.Target == "production" {
-					m.pending, m.pendingDep, m.confirmInput = pendRollback, d, ""
-				}
+			if d := m.selectedDep(); d != nil && d.Status() == "ready" && d.Target == "production" {
+				m.pending, m.pendingDep, m.confirmInput = pendRollback, *d, ""
 			}
 		case "l":
-			if m.depCursor < len(deps) {
-				d := deps[m.depCursor]
-				m.detail = &d
+			if d := m.selectedDep(); d != nil {
+				m.detail = d
 				m.logs, m.logScroll = nil, 0
 				m.mode = modeLogs
 				return m, m.fetchLogs()
 			}
 		case "o":
-			if m.depCursor < len(deps) {
-				return m, openBrowser("https://" + deps[m.depCursor].URL)
+			if d := m.selectedDep(); d != nil {
+				return m, openBrowser("https://" + d.URL)
 			}
 		case "c":
-			if m.depCursor < len(deps) {
-				return m, copyURL("https://" + deps[m.depCursor].URL)
+			if d := m.selectedDep(); d != nil {
+				return m, copyURL("https://" + d.URL)
 			}
 		}
 
@@ -964,4 +976,55 @@ func (m Model) visibleDeps() []api.Deployment {
 		out = append(out, d)
 	}
 	return out
+}
+
+// displayRow is one renderable row in the deployments view.
+type displayRow struct {
+	project string          // non-empty for a project head row
+	dep     *api.Deployment // set for a child deployment row
+	count   int             // child count, only for head rows
+}
+
+// displayRows returns the rows to show: when grouped, one head row per
+// project (its latest deployment as the summary) plus the expanded
+// project's deployments; otherwise the flat list.
+func (m Model) displayRows() []displayRow {
+	deps := m.visibleDeps()
+	if !m.grouped {
+		rows := make([]displayRow, 0, len(deps))
+		for i := range deps {
+			rows = append(rows, displayRow{dep: &deps[i]})
+		}
+		return rows
+	}
+	// group by project, preserving newest-first order of first appearance
+	var order []string
+	byProj := map[string][]api.Deployment{}
+	for _, d := range deps {
+		if byProj[d.Name] == nil {
+			order = append(order, d.Name)
+		}
+		byProj[d.Name] = append(byProj[d.Name], d)
+	}
+	var rows []displayRow
+	for _, name := range order {
+		list := byProj[name]
+		rows = append(rows, displayRow{project: name, count: len(list), dep: &list[0]})
+		if name == m.expanded {
+			for i := range list {
+				rows = append(rows, displayRow{dep: &list[i]})
+			}
+		}
+	}
+	return rows
+}
+
+// selectedDep returns the deployment at the cursor, or nil if the cursor
+// is on a project head row.
+func (m Model) selectedDep() *api.Deployment {
+	rows := m.displayRows()
+	if m.depCursor < 0 || m.depCursor >= len(rows) {
+		return nil
+	}
+	return rows[m.depCursor].dep
 }

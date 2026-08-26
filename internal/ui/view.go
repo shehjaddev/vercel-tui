@@ -99,34 +99,62 @@ func (m Model) statusBar() string {
 }
 
 func (m Model) deploymentsView() string {
-	deps := m.visibleDeps()
-	if len(deps) == 0 {
+	rows := m.displayRows()
+	if len(rows) == 0 {
 		return dimStyle.Render("no deployments match") + "\n"
 	}
-	rows := []string{headerStyle.Render(row(depWidths, "", "PROJECT", "TARGET", "STATE", "BRANCH", "COMMIT", "AUTHOR", "AGE", "DURATION"))}
+	out := []string{headerStyle.Render(row(depWidths, "", "PROJECT", "TARGET", "STATE", "BRANCH", "COMMIT", "AUTHOR", "AGE", "DURATION"))}
 	maxRows := max(m.height-8, 1)
-	start := clamp(m.depCursor-maxRows+2, 0, max(len(deps)-maxRows, 0))
-	for i := start; i < min(start+maxRows, len(deps)); i++ {
-		d := deps[i]
-		st := d.Status()
-		cells := []string{
-			marker(i == m.depCursor),
-			trunc(d.Name, 18),
-			targetLabel(d.Target),
-			stateStyle[st].Render(trunc(st, 9)),
-			trunc(d.Branch(), 24),
-			trunc(d.ShortSHA(), 8),
-			trunc(d.Creator.Username, 10),
-			relAge(d.CreatedMs()),
-			duration(d.Duration()),
+	start := clamp(m.depCursor-maxRows+2, 0, max(len(rows)-maxRows, 0))
+	for i := start; i < min(start+maxRows, len(rows)); i++ {
+		r := rows[i]
+		var cells []string
+		if r.project != "" {
+			d := r.dep
+			state, target, branch, sha, author, age, dur := "", "", "", "", "", "", ""
+			if d != nil {
+				st := d.Status()
+				state = stateStyle[st].Render(st)
+				target = targetLabel(d.Target)
+				branch = d.Branch()
+				sha = d.ShortSHA()
+				author = d.Creator.Username
+				age = relAge(d.CreatedMs())
+				dur = duration(d.Duration())
+			}
+			cells = []string{
+				"",
+				trunc(r.project, 18),
+				trunc(target, 11),
+				state,
+				trunc(branch, 24),
+				trunc(sha, 8),
+				trunc(author, 10),
+				age,
+				dur,
+			}
+		} else if r.dep != nil {
+			d := *r.dep
+			st := d.Status()
+			cells = []string{
+				marker(i == m.depCursor),
+				"",
+				trunc(targetLabel(d.Target), 11),
+				stateStyle[st].Render(trunc(st, 9)),
+				trunc(d.Branch(), 24),
+				trunc(d.ShortSHA(), 8),
+				trunc(d.Creator.Username, 10),
+				relAge(d.CreatedMs()),
+				duration(d.Duration()),
+			}
 		}
 		line := row(depWidths, cells...)
 		if i == m.depCursor {
 			line = selectedStyle.Render(line)
 		}
-		rows = append(rows, line)
+		out = append(out, line)
 	}
-	return strings.Join(rows, "\n") + "\n"
+	return strings.Join(out, "\n") + "\n"
 }
 
 func (m Model) projectsView() string {
@@ -352,7 +380,9 @@ func (m Model) helpView() string {
 		"",
 		"1/2/3    deployments / projects / domains",
 		"j k g G  navigate",
-		"enter    deployment detail (deployments) · scope to project (projects)",
+		"enter    open selected deployment detail",
+		"e        expand the selected project's deployments",
+		"a        toggle: grouped-by-project vs all deployments",
 		"l        live logs of the selected deployment",
 		"/        filter (lists) or log search   n  next match",
 		"e        env vars of selected project",
@@ -369,7 +399,7 @@ func (m Model) helpView() string {
 func (m Model) footer() string {
 	hints := map[mode]string{
 		modeLogin:       "type/paste token · enter save · o open browser · q quit",
-		modeDeployments: "j/k move · enter detail · l logs · R redeploy · D delete · / filter · s state · t team · c copy · o open · ? help · q quit",
+		modeDeployments: "j/k move · e expand · enter detail · l logs · a all/list · x cancel · R redeploy · B rollback · D delete · / filter · s state · t team · c copy · o open · ? help · q quit",
 		modeProjects:    "j/k move · enter scope · e env vars · L link to dir · / filter · t team · ? help · q quit",
 		modeDetail:      "esc back · l logs · R redeploy · D delete · c copy url · o open · q quit",
 		modeEnvs:        "j/k move · n new · e edit value · d delete · esc back · q quit",
