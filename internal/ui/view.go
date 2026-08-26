@@ -103,11 +103,16 @@ func (m Model) deploymentsView() string {
 	if len(rows) == 0 {
 		return dimStyle.Render("no deployments match") + "\n"
 	}
-	out := []string{headerStyle.Render(row(depWidths, "", "PROJECT", "TARGET", "STATE", "BRANCH", "COMMIT", "AUTHOR", "AGE", "DURATION"))}
+	widths := m.depWidths()
+	out := []string{headerStyle.Render(row(widths, "", "PROJECT", "TARGET", "STATE", "BRANCH", "COMMIT", "AUTHOR", "AGE", "DURATION"))}
 	maxRows := max(m.height-8, 1)
 	start := clamp(m.depCursor-maxRows+2, 0, max(len(rows)-maxRows, 0))
 	for i := start; i < min(start+maxRows, len(rows)); i++ {
 		r := rows[i]
+		projectCell := ""
+		if r.indent && r.project == "" {
+			projectCell = dimStyle.Render("  ↳")
+		}
 		var cells []string
 		if r.project != "" {
 			d := r.dep
@@ -123,13 +128,13 @@ func (m Model) deploymentsView() string {
 				dur = duration(d.Duration())
 			}
 			cells = []string{
-				"",
-				trunc(r.project, 18),
-				trunc(target, 11),
+				marker(i == m.depCursor),
+				trunc(r.project, widths[1]),
+				trunc(target, widths[2]),
 				state,
-				trunc(branch, 24),
-				trunc(sha, 8),
-				trunc(author, 10),
+				trunc(branch, widths[4]),
+				trunc(sha, widths[5]),
+				trunc(author, widths[6]),
 				age,
 				dur,
 			}
@@ -138,17 +143,17 @@ func (m Model) deploymentsView() string {
 			st := d.Status()
 			cells = []string{
 				marker(i == m.depCursor),
-				"",
-				trunc(targetLabel(d.Target), 11),
-				stateStyle[st].Render(trunc(st, 9)),
-				trunc(d.Branch(), 24),
-				trunc(d.ShortSHA(), 8),
-				trunc(d.Creator.Username, 10),
+				projectCell,
+				trunc(targetLabel(d.Target), widths[2]),
+				stateStyle[st].Render(trunc(st, widths[3])),
+				trunc(d.Branch(), widths[4]),
+				trunc(d.ShortSHA(), widths[5]),
+				trunc(d.Creator.Username, widths[6]),
 				relAge(d.CreatedMs()),
 				duration(d.Duration()),
 			}
 		}
-		line := row(depWidths, cells...)
+		line := row(widths, cells...)
 		if i == m.depCursor {
 			line = selectedStyle.Render(line)
 		}
@@ -157,29 +162,67 @@ func (m Model) deploymentsView() string {
 	return strings.Join(out, "\n") + "\n"
 }
 
+// depWidths returns column widths, distributing spare horizontal space into
+// the flexible PROJECT and BRANCH columns so the table fills the terminal.
+func (m Model) depWidths() []int {
+	base := []int{1, 19, 11, 10, 25, 9, 11, 10, 8}
+	if m.width <= 0 {
+		return base
+	}
+	total := 0
+	for _, w := range base {
+		total += w
+	}
+	if spare := m.width - total - 1; spare > 0 {
+		// give two columns most of the spare, rounding so widths stay even
+		base[1] += spare / 2
+		base[4] += spare - spare/2
+	}
+	return base
+}
+
 func (m Model) projectsView() string {
 	if len(m.projects) == 0 {
 		return dimStyle.Render("no projects") + "\n"
 	}
-	rows := []string{headerStyle.Render(row(projWidths, "", "PROJECT", "FRAMEWORK", "REPO", "LAST ACTIVITY"))}
+	widths := m.projWidths()
+	rows := []string{headerStyle.Render(row(widths, "", "PROJECT", "FRAMEWORK", "REPO", "LAST ACTIVITY"))}
 	maxRows := max(m.height-8, 1)
 	start := clamp(m.projCursor-maxRows+2, 0, max(len(m.projects)-maxRows, 0))
 	for i := start; i < min(start+maxRows, len(m.projects)); i++ {
 		p := m.projects[i]
 		cells := []string{
 			marker(i == m.projCursor),
-			trunc(p.Name, 26),
-			trunc(p.Framework, 16),
-			trunc(p.Repo(), 32),
+			trunc(p.Name, widths[1]),
+			trunc(p.Framework, widths[2]),
+			trunc(p.Repo(), widths[3]),
 			relAge(p.UpdatedAt),
 		}
-		line := row(projWidths, cells...)
+		line := row(widths, cells...)
 		if i == m.projCursor {
 			line = selectedStyle.Render(line)
 		}
 		rows = append(rows, line)
 	}
 	return strings.Join(rows, "\n") + "\n"
+}
+
+// projWidths spreads spare width into PROJECT and REPO so long repo paths
+// and empty cells read as aligned columns rather than ragged holes.
+func (m Model) projWidths() []int {
+	base := []int{1, 27, 17, 33, 12}
+	if m.width <= 0 {
+		return base
+	}
+	total := 0
+	for _, w := range base {
+		total += w
+	}
+	if spare := m.width - total - 1; spare > 0 {
+		base[1] += spare / 2
+		base[3] += spare - spare/2
+	}
+	return base
 }
 
 func (m Model) detailView() string {
@@ -439,8 +482,6 @@ func (m Model) footer() string {
 	return line
 }
 
-var depWidths = []int{1, 19, 11, 10, 25, 9, 11, 10, 8}
-var projWidths = []int{1, 27, 17, 33, 12}
 var envWidths = []int{1, 31, 29, 11, 12}
 var domWidths = []int{41, 9, 12}
 

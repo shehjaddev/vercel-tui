@@ -983,6 +983,7 @@ type displayRow struct {
 	project string          // non-empty for a project head row
 	dep     *api.Deployment // set for a child deployment row
 	count   int             // child count, only for head rows
+	indent  bool            // child row; render with a tree indent glyph
 }
 
 // displayRows returns the rows to show: when grouped, one head row per
@@ -1012,7 +1013,7 @@ func (m Model) displayRows() []displayRow {
 		rows = append(rows, displayRow{project: name, count: len(list), dep: &list[0]})
 		if name == m.expanded {
 			for i := range list {
-				rows = append(rows, displayRow{dep: &list[i]})
+				rows = append(rows, displayRow{dep: &list[i], indent: true})
 			}
 		}
 	}
