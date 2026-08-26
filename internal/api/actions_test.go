@@ -91,3 +91,29 @@ func TestPromotePath(t *testing.T) {
 		t.Errorf("path = %s", gotPath)
 	}
 }
+
+// Regression for BUG-7: cancel must send an empty JSON body, else Vercel 415s.
+func TestCancelSendsJSONBody(t *testing.T) {
+	var gotCT, gotBody, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotCT = r.Header.Get("Content-Type")
+		buf := make([]byte, r.ContentLength)
+		r.Body.Read(buf)
+		gotBody = string(buf)
+		w.WriteHeader(200)
+		json.NewEncoder(w).Encode(map[string]any{"state": "CANCELED"})
+	}))
+	defer srv.Close()
+	c := New("tok")
+	c.baseURL = srv.URL
+	if _, err := c.CancelDeployment("dpl_1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v12/deployments/dpl_1/cancel" {
+		t.Errorf("path = %s", gotPath)
+	}
+	if gotCT != "application/json" || gotBody != "{}" {
+		t.Errorf("cancel body wrong: ct=%q body=%q", gotCT, gotBody)
+	}
+}

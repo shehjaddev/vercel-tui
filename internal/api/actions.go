@@ -8,7 +8,8 @@ import (
 // CancelDeployment aborts an in-progress build.
 func (c *Client) CancelDeployment(id, teamID string) (*Deployment, error) {
 	var d Deployment
-	if err := c.request("POST", "/v12/deployments/"+id+"/cancel", scoped(url.Values{}, teamID), nil, &d); err != nil {
+	// Vercel returns 415 without an explicit empty JSON body.
+	if err := c.request("POST", "/v12/deployments/"+id+"/cancel", scoped(url.Values{}, teamID), map[string]any{}, &d); err != nil {
 		return nil, err
 	}
 	return &d, nil
