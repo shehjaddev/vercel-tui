@@ -26,7 +26,11 @@ func main() {
 	token := config.ResolveToken(*tokenFlag)
 	link, _ := config.LoadProjectLink(*dir)
 
-	m := ui.New(api.New(token), token != "", *refresh, link, *target, *branch)
+	client := api.New(token)
+	if token == "" {
+		client.SetRefresh(config.RefreshVercelToken)
+	}
+	m := ui.New(client, token != "", *refresh, link, *target, *branch)
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)

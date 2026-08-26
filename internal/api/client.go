@@ -21,6 +21,7 @@ type Client struct {
 	http    *http.Client
 	token   string
 	baseURL string
+	refresh func() (string, error) // optional; refreshes a stale OAuth token
 }
 
 func New(token string) *Client {
@@ -30,6 +31,10 @@ func New(token string) *Client {
 		baseURL: defaultBase,
 	}
 }
+
+// SetRefresh lets the client self-heal a stale OAuth access token: when the
+// API answers 403, it asks for a new one and retries once.
+func (c *Client) SetRefresh(fn func() (string, error)) { c.refresh = fn }
 
 // withQuery appends "?query" only when there is one.
 func withQuery(path string, q url.Values) string {
@@ -70,9 +75,14 @@ func (c *Client) request(method, path string, query url.Values, body any, out an
 // do performs a request with 429 backoff and returns the raw response
 // body. Non-2xx responses become errors.
 func (c *Client) do(method, fullURL string, payload []byte) ([]byte, error) {
+	refreshed := false
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Duration(1<<uint(attempt-1)) * time.Second)
+		}
+		if refreshed {
+			attempt = -1 // restart the loop without burning 429 backoff
+			refreshed = false
 		}
 		req, err := http.NewRequest(method, fullURL, bytes.NewReader(payload))
 		if err != nil {
@@ -96,6 +106,13 @@ func (c *Client) do(method, fullURL string, payload []byte) ([]byte, error) {
 			continue
 		}
 		if resp.StatusCode >= 400 {
+			if resp.StatusCode == http.StatusForbidden && c.refresh != nil && !refreshed {
+				if tok, rerr := c.refresh(); rerr == nil {
+					c.token = tok
+					refreshed = true
+					continue
+				}
+			}
 			return nil, apiError(method, fullURL, resp.StatusCode, body)
 		}
 		return body, nil
