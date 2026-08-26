@@ -78,6 +78,20 @@ type ProjectLink struct {
 	OrgID     string `json:"orgId"`
 }
 
+// WriteProjectLink writes .vercel/project.json so the official CLI and vtui
+// both pick up the same project/team scoping.
+func WriteProjectLink(dir, projectID, orgID string) error {
+	dir = filepath.Join(dir, ".vercel")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(map[string]string{"projectId": projectID, "orgId": orgID}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "project.json"), data, 0o644)
+}
+
 func LoadProjectLink(dir string) (*ProjectLink, error) {
 	b, err := os.ReadFile(filepath.Join(dir, ".vercel", "project.json"))
 	if err != nil {

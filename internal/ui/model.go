@@ -810,6 +810,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.envCursor = 0
 				return m, m.fetchEnvs()
 			}
+		case "L":
+			if m.projCursor < len(m.projects) {
+				p := m.projects[m.projCursor]
+				org := m.teamID()
+				return m, func() tea.Msg {
+					err := config.WriteProjectLink(".", p.ID, org)
+					return actionMsg{text: "linked " + p.Name + " to ./vercel/project.json", err: err}
+				}
+			}
 		}
 
 	case modeDetail:

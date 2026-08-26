@@ -356,6 +356,7 @@ func (m Model) helpView() string {
 		"l        live logs of the selected deployment",
 		"/        filter (lists) or log search   n  next match",
 		"e        env vars of selected project",
+		"L        link selected project to ./vercel/project.json",
 		"x        cancel building deployment      D  delete (typed confirm)",
 		"R        redeploy same commit            B  instant rollback (prod)",
 		"c        copy deployment URL to clipboard",
@@ -369,7 +370,7 @@ func (m Model) footer() string {
 	hints := map[mode]string{
 		modeLogin:       "type/paste token · enter save · o open browser · q quit",
 		modeDeployments: "j/k move · enter detail · l logs · R redeploy · D delete · / filter · s state · t team · c copy · o open · ? help · q quit",
-		modeProjects:    "j/k move · enter scope · e env vars · / filter · t team · ? help · q quit",
+		modeProjects:    "j/k move · enter scope · e env vars · L link to dir · / filter · t team · ? help · q quit",
 		modeDetail:      "esc back · l logs · R redeploy · D delete · c copy url · o open · q quit",
 		modeEnvs:        "j/k move · n new · e edit value · d delete · esc back · q quit",
 		modeDomains:     "esc back · q quit",
