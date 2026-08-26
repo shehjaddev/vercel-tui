@@ -111,7 +111,11 @@ func (m Model) deploymentsView() string {
 		r := rows[i]
 		projectCell := ""
 		if r.indent && r.project == "" {
-			projectCell = dimStyle.Render("  ↳")
+			if r.last {
+				projectCell = dimStyle.Render("  └──")
+			} else {
+				projectCell = dimStyle.Render("  ├──")
+			}
 		}
 		var cells []string
 		if r.project != "" {
@@ -174,9 +178,10 @@ func (m Model) depWidths() []int {
 		total += w
 	}
 	if spare := m.width - total - 1; spare > 0 {
-		// give two columns most of the spare, rounding so widths stay even
-		base[1] += spare / 2
-		base[4] += spare - spare/2
+		// widen only the PROJECT column (names genuinely vary); leave the
+		// rest content-sized so short values like branch names don't create
+		// a huge internal void.
+		base[1] += spare
 	}
 	return base
 }
@@ -219,8 +224,7 @@ func (m Model) projWidths() []int {
 		total += w
 	}
 	if spare := m.width - total - 1; spare > 0 {
-		base[1] += spare / 2
-		base[3] += spare - spare/2
+		base[1] += spare
 	}
 	return base
 }
