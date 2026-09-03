@@ -147,6 +147,10 @@ func (m Model) topDetail() string {
 	if d == nil {
 		return ""
 	}
+	// prefer the enriched detail (aliases etc.) when it matches the selection
+	if m.detail != nil && m.detail.Key() == d.Key() {
+		d = m.detail
+	}
 
 	val := func(s string) string {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Render(s)
@@ -165,7 +169,7 @@ func (m Model) topDetail() string {
 	line2 := ""
 	if msg := d.Message(); msg != "" {
 		msg = strings.ReplaceAll(msg, "\n", " ")
-		line2 = dimStyle.Render(trunc(msg, max(m.width-10, 20))) + "\n"
+		line2 = val(trunc(msg, max(m.width-10, 20))) + "\n"
 	}
 
 	// line 3: author · created · ready · duration
@@ -336,7 +340,7 @@ func (m Model) actionsView() string {
 	for i, a := range actions {
 		mark := "  "
 		if i == m.actionCursor {
-			mark = selectedStyle.Render("▸ ")
+			mark = "❯ "
 		}
 		out.WriteString(mark + a.label + dimStyle.Render("  ("+a.key+")") + "\n")
 	}

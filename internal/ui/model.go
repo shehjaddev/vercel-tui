@@ -111,6 +111,7 @@ type teamsMsg struct {
 }
 type depsMsg struct{ deps []api.Deployment }
 type projectsMsg struct{ projects []api.Project }
+type detailMsg struct{ d *api.Deployment }
 type logsMsg struct{ lines []string }
 type tokenOkMsg struct {
 	user  string
@@ -217,6 +218,22 @@ func (m Model) fetchProjects() tea.Cmd {
 			return errMsg{err}
 		}
 		return projectsMsg{ps}
+	}
+}
+
+// fetchDetail enriches a deployment with full data (aliases etc.) from the
+// detail endpoint, which the list response does not carry.
+func (m Model) fetchDetail(d api.Deployment) tea.Cmd {
+	c, id, team := m.client, d.UID, m.teamID()
+	if d.UID == "" {
+		id = d.ID
+	}
+	return func() tea.Msg {
+		full, err := c.Deployment(id, team)
+		if err != nil {
+			return errMsg{err}
+		}
+		return detailMsg{full}
 	}
 }
 
@@ -553,6 +570,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading, m.throttled = false, false
 		m.lastLoad = time.Now()
 		m.depCursor = clamp(m.depCursor, 0, max(len(m.displayRows())-1, 0))
+		// enrich the selection with full detail (aliases etc.)
+		if m.mode == modeDeployments {
+			m.detail = nil
+			if d := m.selectedDep(); d != nil {
+				return m, m.fetchDetail(*d)
+			}
+		}
+
+	case detailMsg:
+		// only accept the enriched detail if it's still the selected deployment
+		if m.mode == modeDeployments {
+			if cur := m.selectedDep(); cur != nil && msg.d.Key() == cur.Key() {
+				m.detail = msg.d
+			}
+		}
 
 	case projectsMsg:
 		m.projects = msg.projects
@@ -790,18 +822,32 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.mode {
 	case modeDeployments:
 		rows := m.displayRows()
+		// fetchDetailCmd returns a command that enriches the selected row.
+		refreshDetail := func() tea.Cmd {
+			m.detail = nil
+			if d := m.selectedDep(); d != nil {
+				return m.fetchDetail(*d)
+			}
+			return nil
+		}
 		switch key {
 		case "j", "down":
 			m.depCursor = clamp(m.depCursor+1, 0, len(rows)-1)
+			return m, refreshDetail()
 		case "k", "up":
 			m.depCursor = clamp(m.depCursor-1, 0, len(rows)-1)
+			return m, refreshDetail()
 		case "g", "home":
 			m.depCursor = 0
+			return m, refreshDetail()
 		case "G", "end":
 			m.depCursor = len(rows) - 1
+			return m, refreshDetail()
 		case "enter":
 			if d := m.selectedDep(); d != nil {
-				m.detail = d
+				if m.detail == nil || m.detail.Key() != d.Key() {
+					m.detail = d
+				}
 				m.mode = modeActions
 				m.actionCursor = 0
 			}
