@@ -263,18 +263,14 @@ func (m Model) fetchAllProjectDetails() tea.Cmd {
 	}
 	return func() tea.Msg {
 		byKey := map[string]api.Deployment{}
-		for i := 0; i < len(pending); i += 3 {
-			end := min(i+3, len(pending))
-			for _, d := range pending[i:end] {
-				full, err := c.Deployment(d.Key(), team)
-				if err != nil {
-					continue
-				}
-				byKey[d.Key()] = *full
+		// one project per turn, pausing between, to stay under the rate limit
+		for _, d := range pending {
+			full, err := c.Deployment(d.Key(), team)
+			if err != nil {
+				continue
 			}
-			if end < len(pending) {
-				time.Sleep(1500 * time.Millisecond) // let the rate limit reset
-			}
+			byKey[d.Key()] = *full
+			time.Sleep(1200 * time.Millisecond) // let the rate limit reset
 		}
 		return detailsMsg{byKey: byKey}
 	}
