@@ -34,8 +34,8 @@ order:
 
 1. `--token` flag
 2. `VERCEL_TOKEN` environment variable
-3. a token you've stored with the official CLI (`~/.local/share/com.vercel.cli/auth.json`)
-4. a token previously saved by `vtui` itself (`~/.config/vtui/token`)
+3. a token previously saved by `vtui` itself (`~/.config/vtui/token`)
+4. a token you've stored with the official CLI (`~/.local/share/com.vercel.cli/auth.json`)
 
 If none exist, the app shows a login screen: press `o` to open
 vercel.com/account/tokens, paste a token, and it is validated and stored
