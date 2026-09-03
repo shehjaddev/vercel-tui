@@ -243,6 +243,43 @@ func (m Model) fetchDetail(d api.Deployment) tea.Cmd {
 	}
 }
 
+// fetchAllProjectDetails prefetches the detail (aliases) of each project's
+// head deployment, 3 at a time with a pause between batches, so Vercel's
+// rate limit doesn't choke it. Runs at session start; results are cached.
+func (m Model) fetchAllProjectDetails() tea.Cmd {
+	c, team := m.client, m.teamID()
+	var heads []api.Deployment
+	for _, g := range m.projectGroups() {
+		if len(g.deployments) > 0 {
+			heads = append(heads, g.deployments[0])
+		}
+	}
+	// only fetch heads we haven't already cached
+	var pending []api.Deployment
+	for _, d := range heads {
+		if _, ok := m.detailCache[d.Key()]; !ok {
+			pending = append(pending, d)
+		}
+	}
+	return func() tea.Msg {
+		byKey := map[string]api.Deployment{}
+		for i := 0; i < len(pending); i += 3 {
+			end := min(i+3, len(pending))
+			for _, d := range pending[i:end] {
+				full, err := c.Deployment(d.Key(), team)
+				if err != nil {
+					continue
+				}
+				byKey[d.Key()] = *full
+			}
+			if end < len(pending) {
+				time.Sleep(1500 * time.Millisecond) // let the rate limit reset
+			}
+		}
+		return detailsMsg{byKey: byKey}
+	}
+}
+
 func (m Model) fetchLogs() tea.Cmd {
 	c, team := m.client, m.teamID()
 	id := ""
@@ -576,15 +613,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading, m.throttled = false, false
 		m.lastLoad = time.Now()
 		m.depCursor = clamp(m.depCursor, 0, max(len(m.displayRows())-1, 0))
-		// Fetch the selected row's detail (aliases) only when not already
-		// cached, so ordinary polls don't cause a 1s aliases-flicker. The
-		// cache returns instant on re-selection.
-		if m.mode == modeDeployments {
-			if d := m.selectedDep(); d != nil {
-				if _, cached := m.detailCache[d.Key()]; !cached {
-					return m, m.fetchDetail(*d)
-				}
-			}
+		// prefetch aliases for every project's head at session start, 3 at a
+		// time; afterwards navigation reads the cache.
+		if m.mode == modeDeployments && len(m.detailCache) == 0 {
+			return m, m.fetchAllProjectDetails()
 		}
 
 	case detailsMsg:
