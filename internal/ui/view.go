@@ -137,7 +137,7 @@ func (m Model) deploymentsView() string {
 
 	list := strings.Join(body, "\n")
 
-	return detail + "\n" + list
+	return detail + m.topDetailSeparator() + list
 }
 
 // topDetail is a pinned 2-3 line block showing the selected deployment.
@@ -147,31 +147,46 @@ func (m Model) topDetail() string {
 		return ""
 	}
 
-	// line 1: name · sha · titled state · branch · target
-	line1 := titleStyle.Render(d.Name) + "  " +
-		dimStyle.Render(d.ShortSHA()) + "  " +
-		stateStyle[d.Status()].Render(strings.ToUpper(d.Status())) + "  " +
-		dimStyle.Render(d.Branch()) + "  " +
-		dimStyle.Render(targetLabel(d.Target))
+	// readable value color (labels stay muted)
+	val := func(s string) string {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Render(s)
+	}
 
-	// line 2: message (single line, collapse embedded newlines)
+	// line 1: project · state · branch · commit · target
+	line1 := []string{
+		titleStyle.Render(d.Name),
+		stateStyle[d.Status()].Render(strings.ToUpper(d.Status())),
+		val(d.Branch()),
+		val(d.ShortSHA()),
+		val(targetLabel(d.Target)),
+	}
+
+	// line 2: commit message (single line, collapse embedded newlines)
 	line2 := ""
 	if msg := d.Message(); msg != "" {
 		msg = strings.ReplaceAll(msg, "\n", " ")
-		line2 = dimStyle.Render(trunc(msg, max(m.width-8, 20))) + "\n"
+		line2 = dimStyle.Render(trunc(msg, max(m.width-10, 20))) + "\n"
 	}
 
-	// line 3: author · created · duration
-	parts := []string{
-		dimStyle.Render("Author " + d.Creator.Username),
-		dimStyle.Render("Created " + absTime(d.CreatedMs())),
+	// line 3: author · created · duration · url
+	line3 := []string{
+		dimStyle.Render("by " + d.Creator.Username),
+		dimStyle.Render(absTime(d.CreatedMs())),
 	}
 	if t := d.ReadyMs(); t > 0 {
-		parts = append(parts, dimStyle.Render("Build "+duration(d.Duration())))
+		line3 = append(line3, dimStyle.Render(duration(d.Duration())))
 	}
-	line3 := strings.Join(parts, "   ")
+	if d.URL != "" {
+		line3 = append(line3, dimStyle.Render("https://"+trunc(d.URL, 30)))
+	}
 
-	return line1 + "\n" + line2 + line3
+	return strings.Join(line1, "  ") + "\n" + line2 + strings.Join(line3, "   ")
+}
+
+// topDetailSeparator renders the gap + divider between the detail block
+// and the list, so the two read as separate regions.
+func (m Model) topDetailSeparator() string {
+	return "\n" + dimStyle.Render(strings.Repeat("─", min(m.width-2, 60))) + "\n"
 }
 
 // projectChip renders one project's recent deploy-state distribution.
