@@ -1004,13 +1004,34 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "e":
-			if m.depCursor < len(rows) && rows[m.depCursor].project != "" {
-				if m.expanded == rows[m.depCursor].project {
-					m.expanded = ""
-				} else {
-					m.expanded = rows[m.depCursor].project
+			if d := m.selectedDep(); d != nil {
+				pid := ""
+				if cached, ok := m.detailCache[d.Key()]; ok {
+					pid = cached.Project.ID
 				}
-				return m, nil
+				if pid == "" {
+					return m, nil
+				}
+				m.envProject = api.Project{Name: d.Name, ID: pid}
+				m.mode = modeEnvs
+				m.envCursor = 0
+				return m, m.fetchEnvs()
+			}
+		case "L":
+			if d := m.selectedDep(); d != nil {
+				pid := ""
+				if cached, ok := m.detailCache[d.Key()]; ok {
+					pid = cached.Project.ID
+				}
+				if pid == "" {
+					return m, nil
+				}
+				p := api.Project{Name: d.Name, ID: pid}
+				org := m.teamID()
+				return m, func() tea.Msg {
+					err := config.WriteProjectLink(m.dir, p.ID, org)
+					return actionMsg{text: "linked " + p.Name + " (" + filepath.Join(m.dir, ".vercel/project.json") + ")", err: err}
+				}
 			}
 		case "a":
 			m.grouped = !m.grouped

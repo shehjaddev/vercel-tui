@@ -199,13 +199,7 @@ func (m Model) topDetail() string {
 		}
 	}
 
-	// line 6: aliases (if any)
-	line6 := ""
-	if len(d.Alias) > 0 {
-		line6 = dimStyle.Render("aliases") + " " + val(trunc(strings.Join(d.Alias, ", "), max(m.width-8, 30)))
-	}
-
-	return strings.Join(line1, "  ") + "\n" + line2 + line3 + "\n" + line4 + line5 + line6
+	return strings.Join(line1, "  ") + "\n" + line2 + line3 + "\n" + line4 + line5
 }
 
 // topDetailSeparator renders the gap + divider between the detail block
@@ -528,7 +522,7 @@ func (m Model) helpView() string {
 func (m Model) footer() string {
 	hints := map[mode]string{
 		modeLogin:       "type/paste token · enter save · o open browser · q quit",
-		modeDeployments: "j/k move · e expand · enter actions · l logs · a all/list · U unlink · x cancel · R redeploy · B rollback · D delete · / filter · s state · t team · c copy · o open · ? help · q quit",
+		modeDeployments: "j/k move · e env vars · L link to dir · enter actions · l logs · a all/list · U unlink · x cancel · R redeploy · B rollback · D delete · / filter · s state · t team · c copy · o open · ? help · q quit",
 		modeProjects:    "j/k move · enter scope · e env vars · L link to dir · U unlink · / filter · t team · ? help · q quit",
 		modeActions:     "j/k move · enter run · esc back · q quit",
 		modeEnvs:        "j/k move · n new · e edit value · d delete · esc back · q quit",

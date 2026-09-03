@@ -73,9 +73,13 @@ func TestAliasInTopDetail(t *testing.T) {
 		Meta: map[string]string{"githubCommitRef": "main", "githubCommitSha": "a7764a7", "githubCommitMessage": "msg"},
 	}}})
 	m = model.(Model)
-	out := m.topDetail()
-	if !strings.Contains(out, "aliases") || !strings.Contains(out, "www.shehjad.dev") {
-		t.Fatalf("aliases missing in top detail:\n%s", out)
+	// aliases are intentionally not rendered in the top detail anymore, but
+	// the data is still cached so it can be re-added later.
+	if strings.Contains(m.topDetail(), "aliases") {
+		t.Fatalf("aliases should not render in top detail:\n%s", m.topDetail())
+	}
+	if cached, ok := m.detailCache["dpl_1"]; !ok || len(cached.Alias) == 0 {
+		t.Fatalf("alias data should remain in the cache")
 	}
 }
 
