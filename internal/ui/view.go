@@ -117,6 +117,7 @@ func (m Model) deploymentsView() string {
 	start := clamp(m.depCursor-maxRows+2, 0, max(len(rows)-maxRows, 0))
 	for i := start; i < min(start+maxRows, len(rows)); i++ {
 		r := rows[i]
+		sel := i == m.depCursor
 		var cells []string
 		if r.project != "" {
 			g := m.groupByName(r.project)
@@ -124,12 +125,12 @@ func (m Model) deploymentsView() string {
 			if len(g.deployments) > 0 {
 				latest = &g.deployments[0]
 			}
-			cells = m.boardHeadCells(r.project, latest, widths, m.expanded == r.project)
+			cells = m.boardHeadCells(r.project, latest, widths, m.expanded == r.project, sel)
 		} else if r.dep != nil {
-			cells = m.boardChildCells(*r.dep, widths)
+			cells = m.boardChildCells(*r.dep, widths, sel)
 		}
 		line := row(widths, cells...)
-		if i == m.depCursor {
+		if sel {
 			line = selectedStyle.Render(line)
 		}
 		body = append(body, line)
@@ -167,26 +168,29 @@ func (m Model) topDetail() string {
 		line2 = dimStyle.Render(trunc(msg, max(m.width-10, 20))) + "\n"
 	}
 
-	// line 3: author · created · ready · duration · url
+	// line 3: author · created · ready · duration
 	meta := []string{
-		dimStyle.Render("by " + d.Creator.Username),
-		dimStyle.Render(absTime(d.CreatedMs())),
+		val(d.Creator.Username),
+		val(absTime(d.CreatedMs())),
 	}
 	if t := d.ReadyMs(); t > 0 {
-		meta = append(meta, dimStyle.Render("ready "+absTime(t)+" · "+duration(d.Duration())))
+		meta = append(meta, val(absTime(t)+" · "+duration(d.Duration())))
 	}
-	if d.URL != "" {
-		meta = append(meta, dimStyle.Render("https://"+trunc(d.URL, 30)))
-	}
-	line3 := strings.Join(meta, "   ")
+	line3 := dimStyle.Render("by") + " " + strings.Join(meta, "   ")
 
-	// line 4: aliases (if any)
+	// line 4: url (readable, untruncated when it fits)
 	line4 := ""
-	if len(d.Alias) > 0 {
-		line4 = dimStyle.Render("aliases "+trunc(strings.Join(d.Alias, ", "), max(m.width-10, 20))) + "\n"
+	if d.URL != "" {
+		line4 = dimStyle.Render("url") + " " + val(trunc("https://"+d.URL, max(m.width-8, 30))) + "\n"
 	}
 
-	return strings.Join(line1, "  ") + "\n" + line2 + line3 + "\n" + line4
+	// line 5: aliases (if any)
+	line5 := ""
+	if len(d.Alias) > 0 {
+		line5 = dimStyle.Render("aliases") + " " + val(trunc(strings.Join(d.Alias, ", "), max(m.width-8, 30)))
+	}
+
+	return strings.Join(line1, "  ") + "\n" + line2 + line3 + "\n" + line4 + line5
 }
 
 // topDetailSeparator renders the gap + divider between the detail block
@@ -211,21 +215,25 @@ func (m Model) boardWidths() []int {
 	return []int{1, 20, 10, 22, 9, 10}
 }
 
-func (m Model) boardHeadCells(project string, latest *api.Deployment, widths []int, expanded bool) []string {
-	flag := "▸"
-	if expanded {
-		flag = "▾"
+func (m Model) boardHeadCells(project string, latest *api.Deployment, widths []int, expanded, selected bool) []string {
+	mark := "  "
+	if selected {
+		mark = "❯"
 	}
 	state, branch, sha, age := "", "", "", ""
 	if latest != nil {
 		st := latest.Status()
-		state = stateStyle[st].Render(strings.ToUpper(st))
+		if selected {
+			state = strings.ToUpper(st) // inherit the selection highlight
+		} else {
+			state = stateStyle[st].Render(strings.ToUpper(st))
+		}
 		branch = latest.Branch()
 		sha = latest.ShortSHA()
 		age = relAge(latest.CreatedMs())
 	}
 	return []string{
-		flag,
+		mark,
 		trunc(project, widths[1]),
 		state,
 		trunc(branch, widths[3]),
@@ -234,12 +242,20 @@ func (m Model) boardHeadCells(project string, latest *api.Deployment, widths []i
 	}
 }
 
-func (m Model) boardChildCells(d api.Deployment, widths []int) []string {
+func (m Model) boardChildCells(d api.Deployment, widths []int, selected bool) []string {
 	st := d.Status()
+	mark := "  "
+	if selected {
+		mark = "❯"
+	}
+	state := stateStyle[st].Render(strings.ToUpper(st))
+	if selected {
+		state = strings.ToUpper(st) // inherit the selection highlight
+	}
 	return []string{
-		"  ",
+		mark,
 		"  " + trunc(d.Name, widths[1]-6),
-		stateStyle[st].Render(strings.ToUpper(st)),
+		state,
 		trunc(d.Branch(), widths[3]),
 		trunc(d.ShortSHA(), widths[4]),
 		relAge(d.CreatedMs()),
@@ -496,7 +512,7 @@ func (m Model) helpView() string {
 		"",
 		"1/2/3    deployments / projects / domains",
 		"j k g G  navigate",
-		"enter    open selected deployment detail",
+		"enter    open actions for selected deployment",
 		"e        expand the selected project's deployments",
 		"a        toggle: grouped-by-project vs all deployments",
 		"l        live logs of the selected deployment",
@@ -515,7 +531,7 @@ func (m Model) helpView() string {
 func (m Model) footer() string {
 	hints := map[mode]string{
 		modeLogin:       "type/paste token · enter save · o open browser · q quit",
-		modeDeployments: "j/k move · e expand · enter detail · l logs · a all/list · x cancel · R redeploy · B rollback · D delete · / filter · s state · t team · c copy · o open · ? help · q quit",
+		modeDeployments: "j/k move · e expand · enter actions · l logs · a all/list · x cancel · R redeploy · B rollback · D delete · / filter · s state · t team · c copy · o open · ? help · q quit",
 		modeProjects:    "j/k move · enter scope · e env vars · L link to dir · / filter · t team · ? help · q quit",
 		modeActions:     "j/k move · enter run · esc back · q quit",
 		modeEnvs:        "j/k move · n new · e edit value · d delete · esc back · q quit",
