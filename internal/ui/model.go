@@ -20,7 +20,7 @@ const (
 	modeLogin mode = iota
 	modeDeployments
 	modeProjects
-	modeDetail
+	modeActions
 	modeLogs
 	modeEnvs
 	modeDomains
@@ -51,15 +51,16 @@ type Model struct {
 	teams   []api.Team // index 0 is the personal account
 	teamIdx int
 
-	deps       []api.Deployment
-	depCursor  int
-	grouped    bool   // default: one row per project, expandable
-	expanded   string // project name currently expanded ("" = none)
-	projects   []api.Project
-	projCursor int
-	detail     *api.Deployment
-	logs       []string
-	logScroll  int // lines back from the bottom; 0 means following
+	deps         []api.Deployment
+	depCursor    int
+	actionCursor int
+	grouped      bool   // default: one row per project, expandable
+	expanded     string // project name currently expanded ("" = none)
+	projects     []api.Project
+	projCursor   int
+	detail       *api.Deployment
+	logs         []string
+	logScroll    int // lines back from the bottom; 0 means following
 
 	envProject api.Project
 	envs       []api.EnvVar
@@ -110,7 +111,6 @@ type teamsMsg struct {
 }
 type depsMsg struct{ deps []api.Deployment }
 type projectsMsg struct{ projects []api.Project }
-type detailMsg struct{ d *api.Deployment }
 type logsMsg struct{ lines []string }
 type tokenOkMsg struct {
 	user  string
@@ -217,18 +217,6 @@ func (m Model) fetchProjects() tea.Cmd {
 			return errMsg{err}
 		}
 		return projectsMsg{ps}
-	}
-}
-
-func (m Model) fetchDetail(d api.Deployment) tea.Cmd {
-	m.loading = true
-	c, id, team := m.client, d.UID, m.teamID()
-	return func() tea.Msg {
-		full, err := c.Deployment(id, team)
-		if err != nil {
-			return errMsg{err}
-		}
-		return detailMsg{full}
 	}
 }
 
@@ -437,6 +425,72 @@ func (m Model) runAction(pa pendingAction, dep api.Deployment) tea.Cmd {
 	return nil
 }
 
+// actionItem is one entry in the deployment actions menu.
+type actionItem struct {
+	key   string
+	label string
+}
+
+// deploymentActions lists the actions available for the selected deployment.
+func (m Model) deploymentActions() []actionItem {
+	d := m.detail
+	if d == nil {
+		return nil
+	}
+	actions := []actionItem{
+		{"l", "View logs"},
+		{"R", "Redeploy same commit"},
+		{"c", "Copy URL"},
+		{"o", "Open in browser"},
+	}
+	if d.Status() == "building" {
+		actions = append(actions, actionItem{"x", "Cancel build"})
+	}
+	if d.Status() == "ready" && d.Target == "production" {
+		actions = append(actions, actionItem{"B", "Rollback to production"})
+	}
+	// delete is always available but last (destructive)
+	actions = append(actions, actionItem{"D", "Delete deployment"})
+	return actions
+}
+
+// runActionByKey invokes an action by its keybinding.
+func (m Model) runActionByKey(key string) (tea.Model, tea.Cmd) {
+	d := m.detail
+	if d == nil {
+		m.mode = modeDeployments
+		return m, nil
+	}
+	m.mode = modeDeployments // leave the action overlay
+	switch key {
+	case "l":
+		m.logs, m.logScroll = nil, 0
+		m.mode = modeLogs
+		return m, m.fetchLogs()
+	case "o":
+		return m, openBrowser("https://" + d.URL)
+	case "c":
+		return m, copyURL("https://" + d.URL)
+	case "x":
+		if d.Status() == "building" {
+			m.pending, m.pendingDep, m.confirmInput = pendCancel, *d, ""
+		}
+		return m, nil
+	case "R":
+		m.pending, m.pendingDep, m.confirmInput = pendRedeploy, *d, ""
+		return m, nil
+	case "B":
+		if d.Status() == "ready" && d.Target == "production" {
+			m.pending, m.pendingDep, m.confirmInput = pendRollback, *d, ""
+		}
+		return m, nil
+	case "D":
+		m.pending, m.pendingDep, m.confirmInput = pendDelete, *d, ""
+		return m, nil
+	}
+	return m, nil
+}
+
 func (m Model) loadCurrent() tea.Cmd {
 	switch m.mode {
 	case modeDeployments:
@@ -516,13 +570,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.domains = msg.domains
 		m.loading, m.throttled = false, false
 		m.lastLoad = time.Now()
-
-	case detailMsg:
-		m.detail = msg.d
-		m.loading, m.throttled = false, false
-		if m.mode == modeDeployments {
-			m.mode = modeDetail
-		}
 
 	case logsMsg:
 		m.logs = msg.lines
@@ -754,8 +801,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.depCursor = len(rows) - 1
 		case "enter":
 			if d := m.selectedDep(); d != nil {
-				return m, m.fetchDetail(*d)
+				m.detail = d
+				m.mode = modeActions
+				m.actionCursor = 0
 			}
+			return m, nil
 		case "e":
 			if m.depCursor < len(rows) && rows[m.depCursor].project != "" {
 				if m.expanded == rows[m.depCursor].project {
@@ -833,29 +883,26 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case modeDetail:
-		switch key {
-		case "esc":
+	case modeActions:
+		if m.detail == nil {
 			m.mode = modeDeployments
-		case "l":
-			m.logs, m.logScroll = nil, 0
-			m.mode = modeLogs
-			return m, m.fetchLogs()
-		case "o":
-			return m, openBrowser("https://" + m.detail.URL)
-		case "c":
-			return m, copyURL("https://" + m.detail.URL)
-		case "x":
-			if m.detail.Status() == "building" {
-				m.pending, m.pendingDep, m.confirmInput = pendCancel, *m.detail, ""
-			}
-		case "D":
-			m.pending, m.pendingDep, m.confirmInput = pendDelete, *m.detail, ""
-		case "R":
-			m.pending, m.pendingDep, m.confirmInput = pendRedeploy, *m.detail, ""
-		case "B":
-			if m.detail.Status() == "ready" && m.detail.Target == "production" {
-				m.pending, m.pendingDep, m.confirmInput = pendRollback, *m.detail, ""
+			return m, nil
+		}
+		actions := m.deploymentActions()
+		switch key {
+		case "esc", "q":
+			m.mode = modeDeployments
+		case "j", "down":
+			m.actionCursor = clamp(m.actionCursor+1, 0, len(actions)-1)
+		case "k", "up":
+			m.actionCursor = clamp(m.actionCursor-1, 0, len(actions)-1)
+		case "g", "home":
+			m.actionCursor = 0
+		case "G", "end":
+			m.actionCursor = len(actions) - 1
+		case "enter":
+			if m.actionCursor < len(actions) {
+				return m.runActionByKey(actions[m.actionCursor].key)
 			}
 		}
 
@@ -894,10 +941,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		maxScroll := max(len(m.logs)-(m.height-6), 0)
 		switch key {
 		case "esc":
-			m.mode = modeDetail
-			if m.detail == nil {
-				m.mode = modeDeployments
-			}
+			m.mode = modeDeployments
 		case "j", "down":
 			m.logScroll = clamp(m.logScroll-1, 0, maxScroll)
 		case "k", "up":

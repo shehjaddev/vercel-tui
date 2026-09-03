@@ -53,8 +53,8 @@ func (m Model) View() string {
 			b.WriteString(m.deploymentsView())
 		case modeProjects:
 			b.WriteString(m.projectsView())
-		case modeDetail:
-			b.WriteString(m.detailView())
+		case modeActions:
+			b.WriteString(m.actionsView())
 		case modeLogs:
 			b.WriteString(m.logsView())
 		case modeEnvs:
@@ -147,7 +147,6 @@ func (m Model) topDetail() string {
 		return ""
 	}
 
-	// readable value color (labels stay muted)
 	val := func(s string) string {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Render(s)
 	}
@@ -168,19 +167,26 @@ func (m Model) topDetail() string {
 		line2 = dimStyle.Render(trunc(msg, max(m.width-10, 20))) + "\n"
 	}
 
-	// line 3: author · created · duration · url
-	line3 := []string{
+	// line 3: author · created · ready · duration · url
+	meta := []string{
 		dimStyle.Render("by " + d.Creator.Username),
 		dimStyle.Render(absTime(d.CreatedMs())),
 	}
 	if t := d.ReadyMs(); t > 0 {
-		line3 = append(line3, dimStyle.Render(duration(d.Duration())))
+		meta = append(meta, dimStyle.Render("ready "+absTime(t)+" · "+duration(d.Duration())))
 	}
 	if d.URL != "" {
-		line3 = append(line3, dimStyle.Render("https://"+trunc(d.URL, 30)))
+		meta = append(meta, dimStyle.Render("https://"+trunc(d.URL, 30)))
+	}
+	line3 := strings.Join(meta, "   ")
+
+	// line 4: aliases (if any)
+	line4 := ""
+	if len(d.Alias) > 0 {
+		line4 = dimStyle.Render("aliases "+trunc(strings.Join(d.Alias, ", "), max(m.width-10, 20))) + "\n"
 	}
 
-	return strings.Join(line1, "  ") + "\n" + line2 + strings.Join(line3, "   ")
+	return strings.Join(line1, "  ") + "\n" + line2 + line3 + "\n" + line4
 }
 
 // topDetailSeparator renders the gap + divider between the detail block
@@ -303,34 +309,23 @@ func (m Model) projWidths() []int {
 	return base
 }
 
-func (m Model) detailView() string {
+func (m Model) actionsView() string {
 	d := m.detail
 	if d == nil {
 		return ""
 	}
-	kv := func(k, v string) string {
-		return headerStyle.Render(fmt.Sprintf("%-12s", k)) + trunc(v, max(m.width-14, 20))
+	actions := m.deploymentActions()
+	var out strings.Builder
+	out.WriteString(titleStyle.Render("Actions — "+d.Name) + "\n\n")
+	for i, a := range actions {
+		mark := "  "
+		if i == m.actionCursor {
+			mark = selectedStyle.Render("▸ ")
+		}
+		out.WriteString(mark + a.label + dimStyle.Render("  ("+a.key+")") + "\n")
 	}
-	lines := []string{
-		titleStyle.Render(d.Name),
-		"",
-		kv("state", stateStyle[d.Status()].Render(d.Status())),
-		kv("target", targetLabel(d.Target)),
-		kv("url", "https://"+d.URL),
-	}
-	if len(d.Alias) > 0 {
-		lines = append(lines, kv("aliases", strings.Join(d.Alias, ", ")))
-	}
-	lines = append(lines,
-		kv("branch", d.Branch()+" ("+d.ShortSHA()+")"),
-		kv("commit", d.Message()),
-		kv("author", d.Creator.Username),
-		kv("created", absTime(d.CreatedMs())),
-	)
-	if t := d.ReadyMs(); t > 0 {
-		lines = append(lines, kv("ready", absTime(t)+" ("+duration(d.Duration())+")"))
-	}
-	return strings.Join(lines, "\n") + "\n"
+	out.WriteString("\n" + dimStyle.Render("enter run · j/k move · esc back"))
+	return out.String()
 }
 
 func (m Model) logsView() string {
@@ -522,7 +517,7 @@ func (m Model) footer() string {
 		modeLogin:       "type/paste token · enter save · o open browser · q quit",
 		modeDeployments: "j/k move · e expand · enter detail · l logs · a all/list · x cancel · R redeploy · B rollback · D delete · / filter · s state · t team · c copy · o open · ? help · q quit",
 		modeProjects:    "j/k move · enter scope · e env vars · L link to dir · / filter · t team · ? help · q quit",
-		modeDetail:      "esc back · l logs · R redeploy · D delete · c copy url · o open · q quit",
+		modeActions:     "j/k move · enter run · esc back · q quit",
 		modeEnvs:        "j/k move · n new · e edit value · d delete · esc back · q quit",
 		modeDomains:     "esc back · q quit",
 	}
@@ -530,20 +525,12 @@ func (m Model) footer() string {
 	hint := hints[m.mode]
 	// context-dependent actions only advertise when they can fire
 	addHint := func(k, label string) { hint += " · " + k + " " + label }
-	if m.mode == modeDeployments && m.depCursor < len(m.visibleDeps()) {
-		d := m.visibleDeps()[m.depCursor]
+	d := m.selectedDep()
+	if (m.mode == modeDeployments || m.mode == modeActions) && d != nil {
 		if d.Status() == "building" {
 			addHint("x", "cancel")
 		}
 		if d.Status() == "ready" && d.Target == "production" {
-			addHint("B", "rollback")
-		}
-	}
-	if m.mode == modeDetail && m.detail != nil {
-		if m.detail.Status() == "building" {
-			addHint("x", "cancel")
-		}
-		if m.detail.Status() == "ready" && m.detail.Target == "production" {
 			addHint("B", "rollback")
 		}
 	}
