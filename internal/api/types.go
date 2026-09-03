@@ -61,10 +61,13 @@ func (d Deployment) ShortSHA() string {
 
 func (d Deployment) Message() string { return d.Meta["githubCommitMessage"] }
 
-// Repo returns the linked git repository name (e.g. "shehjad-site"), across
-// the Git providers Vercel supports.
+// Repo returns the linked git repository as "owner/repo", matching the
+// Projects view, across the Git providers Vercel supports.
 func (d Deployment) Repo() string {
-	for _, k := range []string{"githubCommitRepo", "gitlabCommitRepo", "bitbucketCommitRepo"} {
+	if org, repo := d.Meta["githubCommitOrg"], d.Meta["githubCommitRepo"]; org != "" && repo != "" {
+		return org + "/" + repo
+	}
+	for _, k := range []string{"gitlabProjectPath", "gitlabCommitRepo", "bitbucketRepo"} {
 		if r := d.Meta[k]; r != "" {
 			return r
 		}
