@@ -36,13 +36,43 @@ func TestConfirmDialogCollectsTyping(t *testing.T) {
 	}
 }
 
-// Regression for BUG-2: detailMsg must switch to the detail view.
-func TestDetailMsgShowsDetail(t *testing.T) {
+// Regression for BUG-2: enter on a deployment opens the actions menu,
+// not a detail view.
+func TestEnterOpensActions(t *testing.T) {
 	m := New(api.New("tok"), true, 0, nil, "", "")
 	m.width, m.height = 80, 24
 	m.mode = modeDeployments
-	model, _ := m.Update(detailMsg{d: &api.Deployment{Name: "web", URL: "web.vercel.sh"}})
-	if got := model.(Model).mode; got != modeDetail {
-		t.Fatalf("mode = %v, want modeDetail", got)
+	m.deps = []api.Deployment{{Name: "web", UID: "dpl_1", URL: "web.vercel.sh", State: "READY", Target: "production"}}
+	m.depCursor = 0
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := model.(Model)
+	if got.mode != modeActions {
+		t.Fatalf("mode = %v, want modeActions", got.mode)
+	}
+	if got.detail == nil || got.detail.Name != "web" {
+		t.Fatalf("detail not set for actions menu")
+	}
+}
+
+// The top detail block must surface aliases from the enriched detail.
+func TestAliasInTopDetail(t *testing.T) {
+	m := New(api.New("tok"), true, 0, nil, "", "")
+	m.width = 168
+	m.deps = []api.Deployment{{
+		UID: "dpl_1", Name: "shehjad", State: "READY", Target: "production",
+		URL:  "shehjad-x.vercel.app",
+		Meta: map[string]string{"githubCommitRef": "main", "githubCommitSha": "a7764a7", "githubCommitMessage": "msg"},
+	}}
+	m.depCursor = 0
+	m.mode = modeDeployments
+	model, _ := m.Update(detailsMsg{byKey: map[string]api.Deployment{"dpl_1": {
+		UID: "dpl_1", Name: "shehjad", State: "READY", Target: "production",
+		URL: "shehjad-x.vercel.app", Alias: []string{"www.shehjad.dev"},
+		Meta: map[string]string{"githubCommitRef": "main", "githubCommitSha": "a7764a7", "githubCommitMessage": "msg"},
+	}}})
+	m = model.(Model)
+	out := m.topDetail()
+	if !strings.Contains(out, "aliases") || !strings.Contains(out, "www.shehjad.dev") {
+		t.Fatalf("aliases missing in top detail:\n%s", out)
 	}
 }

@@ -6,11 +6,13 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/shehjaddev/vercel-tui/internal/api"
 )
 
 var (
 	titleStyle    = lipgloss.NewStyle().Bold(true)
-	selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	selectedStyle = lipgloss.NewStyle().Bold(true).Background(lipgloss.Color("238"))
 	headerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
@@ -51,8 +53,8 @@ func (m Model) View() string {
 			b.WriteString(m.deploymentsView())
 		case modeProjects:
 			b.WriteString(m.projectsView())
-		case modeDetail:
-			b.WriteString(m.detailView())
+		case modeActions:
+			b.WriteString(m.actionsView())
 		case modeLogs:
 			b.WriteString(m.logsView())
 		case modeEnvs:
@@ -103,75 +105,167 @@ func (m Model) deploymentsView() string {
 	if len(rows) == 0 {
 		return dimStyle.Render("no deployments match") + "\n"
 	}
-	widths := m.depWidths()
-	out := []string{headerStyle.Render(row(widths, "", "PROJECT", "TARGET", "STATE", "BRANCH", "COMMIT", "AUTHOR", "AGE", "DURATION"))}
-	maxRows := max(m.height-8, 1)
+
+	// --- top detail block (pinned, 2-3 lines) ---
+	detail := m.topDetail()
+
+	// --- list ---
+	widths := m.boardWidths()
+	var body []string
+	body = append(body, headerStyle.Render(row(widths, "", "PROJECT", "STATE", "BRANCH", "COMMIT", "AGE")))
+	maxRows := max(m.height-9, 1)
 	start := clamp(m.depCursor-maxRows+2, 0, max(len(rows)-maxRows, 0))
 	for i := start; i < min(start+maxRows, len(rows)); i++ {
 		r := rows[i]
-		projectCell := ""
-		if r.indent && r.project == "" {
-			if r.last {
-				projectCell = dimStyle.Render("  └──")
-			} else {
-				projectCell = dimStyle.Render("  ├──")
-			}
-		}
+		sel := i == m.depCursor
 		var cells []string
 		if r.project != "" {
-			d := r.dep
-			state, target, branch, sha, author, age, dur := "", "", "", "", "", "", ""
-			if d != nil {
-				st := d.Status()
-				if i == m.depCursor {
-					state = st // selected row: inherit row highlight uniformly
-				} else {
-					state = stateStyle[st].Render(st)
-				}
-				target = targetLabel(d.Target)
-				branch = d.Branch()
-				sha = d.ShortSHA()
-				author = d.Creator.Username
-				age = relAge(d.CreatedMs())
-				dur = duration(d.Duration())
+			g := m.groupByName(r.project)
+			var latest *api.Deployment
+			if len(g.deployments) > 0 {
+				latest = &g.deployments[0]
 			}
-			cells = []string{
-				marker(i == m.depCursor),
-				trunc(r.project, widths[1]),
-				trunc(target, widths[2]),
-				state,
-				trunc(branch, widths[4]),
-				trunc(sha, widths[5]),
-				trunc(author, widths[6]),
-				age,
-				dur,
-			}
+			cells = m.boardHeadCells(r.project, latest, widths, m.expanded == r.project, sel)
 		} else if r.dep != nil {
-			d := *r.dep
-			st := d.Status()
-			stateCell := stateStyle[st].Render(trunc(st, widths[3]))
-			if i == m.depCursor {
-				stateCell = trunc(st, widths[3]) // selected row: inherit row highlight
-			}
-			cells = []string{
-				marker(i == m.depCursor),
-				projectCell,
-				trunc(targetLabel(d.Target), widths[2]),
-				stateCell,
-				trunc(d.Branch(), widths[4]),
-				trunc(d.ShortSHA(), widths[5]),
-				trunc(d.Creator.Username, widths[6]),
-				relAge(d.CreatedMs()),
-				duration(d.Duration()),
-			}
+			cells = m.boardChildCells(*r.dep, widths, sel)
 		}
 		line := row(widths, cells...)
-		if i == m.depCursor {
+		if sel {
 			line = selectedStyle.Render(line)
 		}
-		out = append(out, line)
+		body = append(body, line)
 	}
-	return strings.Join(out, "\n") + "\n"
+
+	list := strings.Join(body, "\n")
+
+	return detail + m.topDetailSeparator() + list
+}
+
+// topDetail is a pinned 2-3 line block showing the selected deployment.
+func (m Model) topDetail() string {
+	d := m.selectedDep()
+	if d == nil {
+		return ""
+	}
+	// prefer the cached enriched detail (aliases etc.) for this selection
+	if m.detailCache != nil {
+		if cached, ok := m.detailCache[d.Key()]; ok {
+			d = &cached
+		}
+	}
+
+	val := func(s string) string {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Render(s)
+	}
+
+	// line 1: project · state · branch · commit · target
+	line1 := []string{
+		titleStyle.Render(d.Name),
+		stateStyle[d.Status()].Render(strings.ToUpper(d.Status())),
+		val(d.Branch()),
+		val(d.ShortSHA()),
+		val(targetLabel(d.Target)),
+	}
+
+	// line 2: commit message (single line, collapse embedded newlines)
+	line2 := ""
+	if msg := d.Message(); msg != "" {
+		msg = strings.ReplaceAll(msg, "\n", " ")
+		line2 = dimStyle.Render("commit") + " " + val(trunc(msg, max(m.width-12, 24))) + "\n"
+	}
+
+	// line 3: author · created · ready · duration
+	meta := []string{
+		val(d.Creator.Username),
+		val(absTime(d.CreatedMs())),
+	}
+	if t := d.ReadyMs(); t > 0 {
+		meta = append(meta, val(absTime(t)+" · "+duration(d.Duration())))
+	}
+	line3 := dimStyle.Render("by") + " " + strings.Join(meta, "   ")
+
+	// line 4: url (readable, untruncated when it fits)
+	line4 := ""
+	if d.URL != "" {
+		line4 = dimStyle.Render("url") + " " + val(trunc("https://"+d.URL, max(m.width-8, 30))) + "\n"
+	}
+
+	// line 5: aliases (if any)
+	line5 := ""
+	if len(d.Alias) > 0 {
+		line5 = dimStyle.Render("aliases") + " " + val(trunc(strings.Join(d.Alias, ", "), max(m.width-8, 30)))
+	}
+
+	return strings.Join(line1, "  ") + "\n" + line2 + line3 + "\n" + line4 + line5
+}
+
+// topDetailSeparator renders the gap + divider between the detail block
+// and the list, so the two read as separate regions.
+func (m Model) topDetailSeparator() string {
+	return "\n" + dimStyle.Render(strings.Repeat("─", min(m.width-2, 60))) + "\n"
+}
+
+// projectChip renders one project's recent deploy-state distribution.
+func (m Model) groupByName(name string) projectGroup {
+	for _, g := range m.projectGroups() {
+		if g.name == name {
+			return g
+		}
+	}
+	return projectGroup{name: name}
+}
+
+// boardWidths sizes the board columns; content-driven, modest, so the
+// overview reads tight rather than spread out and cluttered.
+func (m Model) boardWidths() []int {
+	return []int{1, 20, 10, 22, 9, 10}
+}
+
+func (m Model) boardHeadCells(project string, latest *api.Deployment, widths []int, expanded, selected bool) []string {
+	mark := "  "
+	if selected {
+		mark = "❯"
+	}
+	state, branch, sha, age := "", "", "", ""
+	if latest != nil {
+		st := latest.Status()
+		if selected {
+			state = strings.ToUpper(st) // inherit the selection highlight
+		} else {
+			state = stateStyle[st].Render(strings.ToUpper(st))
+		}
+		branch = latest.Branch()
+		sha = latest.ShortSHA()
+		age = relAge(latest.CreatedMs())
+	}
+	return []string{
+		mark,
+		trunc(project, widths[1]),
+		state,
+		trunc(branch, widths[3]),
+		trunc(sha, widths[4]),
+		age,
+	}
+}
+
+func (m Model) boardChildCells(d api.Deployment, widths []int, selected bool) []string {
+	st := d.Status()
+	mark := "  "
+	if selected {
+		mark = "❯"
+	}
+	state := stateStyle[st].Render(strings.ToUpper(st))
+	if selected {
+		state = strings.ToUpper(st) // inherit the selection highlight
+	}
+	return []string{
+		mark,
+		"  " + trunc(d.Name, widths[1]-6),
+		state,
+		trunc(d.Branch(), widths[3]),
+		trunc(d.ShortSHA(), widths[4]),
+		relAge(d.CreatedMs()),
+	}
 }
 
 // depWidths returns column widths, distributing spare horizontal space into
@@ -237,34 +331,23 @@ func (m Model) projWidths() []int {
 	return base
 }
 
-func (m Model) detailView() string {
+func (m Model) actionsView() string {
 	d := m.detail
 	if d == nil {
 		return ""
 	}
-	kv := func(k, v string) string {
-		return headerStyle.Render(fmt.Sprintf("%-12s", k)) + trunc(v, max(m.width-14, 20))
+	actions := m.deploymentActions()
+	var out strings.Builder
+	out.WriteString(titleStyle.Render("Actions — "+d.Name) + "\n\n")
+	for i, a := range actions {
+		mark := "  "
+		if i == m.actionCursor {
+			mark = "❯ "
+		}
+		out.WriteString(mark + a.label + dimStyle.Render("  ("+a.key+")") + "\n")
 	}
-	lines := []string{
-		titleStyle.Render(d.Name),
-		"",
-		kv("state", stateStyle[d.Status()].Render(d.Status())),
-		kv("target", targetLabel(d.Target)),
-		kv("url", "https://"+d.URL),
-	}
-	if len(d.Alias) > 0 {
-		lines = append(lines, kv("aliases", strings.Join(d.Alias, ", ")))
-	}
-	lines = append(lines,
-		kv("branch", d.Branch()+" ("+d.ShortSHA()+")"),
-		kv("commit", d.Message()),
-		kv("author", d.Creator.Username),
-		kv("created", absTime(d.CreatedMs())),
-	)
-	if t := d.ReadyMs(); t > 0 {
-		lines = append(lines, kv("ready", absTime(t)+" ("+duration(d.Duration())+")"))
-	}
-	return strings.Join(lines, "\n") + "\n"
+	out.WriteString("\n" + dimStyle.Render("enter run · j/k move · esc back"))
+	return out.String()
 }
 
 func (m Model) logsView() string {
@@ -435,7 +518,7 @@ func (m Model) helpView() string {
 		"",
 		"1/2/3    deployments / projects / domains",
 		"j k g G  navigate",
-		"enter    open selected deployment detail",
+		"enter    open actions for selected deployment",
 		"e        expand the selected project's deployments",
 		"a        toggle: grouped-by-project vs all deployments",
 		"l        live logs of the selected deployment",
@@ -454,9 +537,9 @@ func (m Model) helpView() string {
 func (m Model) footer() string {
 	hints := map[mode]string{
 		modeLogin:       "type/paste token · enter save · o open browser · q quit",
-		modeDeployments: "j/k move · e expand · enter detail · l logs · a all/list · x cancel · R redeploy · B rollback · D delete · / filter · s state · t team · c copy · o open · ? help · q quit",
+		modeDeployments: "j/k move · e expand · enter actions · l logs · a all/list · x cancel · R redeploy · B rollback · D delete · / filter · s state · t team · c copy · o open · ? help · q quit",
 		modeProjects:    "j/k move · enter scope · e env vars · L link to dir · / filter · t team · ? help · q quit",
-		modeDetail:      "esc back · l logs · R redeploy · D delete · c copy url · o open · q quit",
+		modeActions:     "j/k move · enter run · esc back · q quit",
 		modeEnvs:        "j/k move · n new · e edit value · d delete · esc back · q quit",
 		modeDomains:     "esc back · q quit",
 	}
@@ -464,20 +547,12 @@ func (m Model) footer() string {
 	hint := hints[m.mode]
 	// context-dependent actions only advertise when they can fire
 	addHint := func(k, label string) { hint += " · " + k + " " + label }
-	if m.mode == modeDeployments && m.depCursor < len(m.visibleDeps()) {
-		d := m.visibleDeps()[m.depCursor]
+	d := m.selectedDep()
+	if (m.mode == modeDeployments || m.mode == modeActions) && d != nil {
 		if d.Status() == "building" {
 			addHint("x", "cancel")
 		}
 		if d.Status() == "ready" && d.Target == "production" {
-			addHint("B", "rollback")
-		}
-	}
-	if m.mode == modeDetail && m.detail != nil {
-		if m.detail.Status() == "building" {
-			addHint("x", "cancel")
-		}
-		if m.detail.Status() == "ready" && m.detail.Target == "production" {
 			addHint("B", "rollback")
 		}
 	}

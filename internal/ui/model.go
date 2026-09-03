@@ -20,7 +20,7 @@ const (
 	modeLogin mode = iota
 	modeDeployments
 	modeProjects
-	modeDetail
+	modeActions
 	modeLogs
 	modeEnvs
 	modeDomains
@@ -51,15 +51,17 @@ type Model struct {
 	teams   []api.Team // index 0 is the personal account
 	teamIdx int
 
-	deps       []api.Deployment
-	depCursor  int
-	grouped    bool   // default: one row per project, expandable
-	expanded   string // project name currently expanded ("" = none)
-	projects   []api.Project
-	projCursor int
-	detail     *api.Deployment
-	logs       []string
-	logScroll  int // lines back from the bottom; 0 means following
+	deps         []api.Deployment
+	depCursor    int
+	actionCursor int
+	grouped      bool   // default: one row per project, expandable
+	expanded     string // project name currently expanded ("" = none)
+	projects     []api.Project
+	projCursor   int
+	detail       *api.Deployment
+	detailCache  map[string]api.Deployment // enriched detail by deployment key
+	logs         []string
+	logScroll    int // lines back from the bottom; 0 means following
 
 	envProject api.Project
 	envs       []api.EnvVar
@@ -111,6 +113,7 @@ type teamsMsg struct {
 type depsMsg struct{ deps []api.Deployment }
 type projectsMsg struct{ projects []api.Project }
 type detailMsg struct{ d *api.Deployment }
+type detailsMsg struct{ byKey map[string]api.Deployment }
 type logsMsg struct{ lines []string }
 type tokenOkMsg struct {
 	user  string
@@ -167,6 +170,11 @@ func schedule(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
+// sleep is a command that simply waits; used to space out rate-limited fetches.
+func sleep(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg { return struct{}{} })
+}
+
 func fetchTeams(c *api.Client) tea.Cmd {
 	return func() tea.Msg {
 		u, err := c.User()
@@ -220,15 +228,57 @@ func (m Model) fetchProjects() tea.Cmd {
 	}
 }
 
+// fetchAllDetails enriches every deployment in the list at once, so aliases
+// fetchDetail fetches one deployment's full detail (aliases) and caches it
+// keyed by id. It's fired only for the selected row — one request at a time,
+// which is all Vercel's rate limit reliably allows. Cached so returning to a
+// row is instant.
 func (m Model) fetchDetail(d api.Deployment) tea.Cmd {
-	m.loading = true
 	c, id, team := m.client, d.UID, m.teamID()
+	if d.UID == "" {
+		id = d.ID
+	}
+	key := d.Key()
 	return func() tea.Msg {
 		full, err := c.Deployment(id, team)
 		if err != nil {
 			return errMsg{err}
 		}
-		return detailMsg{full}
+		return detailsMsg{byKey: map[string]api.Deployment{key: *full}}
+	}
+}
+
+// fetchNextHeads fetches up to 3 uncached project-head deployments at a
+// time (with a pause between each, staying under the rate limit), returning
+// them in one message so aliases appear after each batch rather than at the
+// very end. Chains to the next 3 on arrival.
+func (m Model) fetchNextHeads() tea.Cmd {
+	c, team := m.client, m.teamID()
+	var heads []api.Deployment
+	for _, g := range m.projectGroups() {
+		if len(g.deployments) > 0 {
+			d := g.deployments[0]
+			if _, ok := m.detailCache[d.Key()]; !ok {
+				heads = append(heads, d)
+				if len(heads) >= 3 {
+					break
+				}
+			}
+		}
+	}
+	if len(heads) == 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		byKey := map[string]api.Deployment{}
+		for _, d := range heads {
+			full, err := c.Deployment(d.Key(), team)
+			if err != nil {
+				continue
+			}
+			byKey[d.Key()] = *full
+		}
+		return detailsMsg{byKey: byKey}
 	}
 }
 
@@ -437,6 +487,72 @@ func (m Model) runAction(pa pendingAction, dep api.Deployment) tea.Cmd {
 	return nil
 }
 
+// actionItem is one entry in the deployment actions menu.
+type actionItem struct {
+	key   string
+	label string
+}
+
+// deploymentActions lists the actions available for the selected deployment.
+func (m Model) deploymentActions() []actionItem {
+	d := m.detail
+	if d == nil {
+		return nil
+	}
+	actions := []actionItem{
+		{"l", "View logs"},
+		{"R", "Redeploy same commit"},
+		{"c", "Copy URL"},
+		{"o", "Open in browser"},
+	}
+	if d.Status() == "building" {
+		actions = append(actions, actionItem{"x", "Cancel build"})
+	}
+	if d.Status() == "ready" && d.Target == "production" {
+		actions = append(actions, actionItem{"B", "Rollback to production"})
+	}
+	// delete is always available but last (destructive)
+	actions = append(actions, actionItem{"D", "Delete deployment"})
+	return actions
+}
+
+// runActionByKey invokes an action by its keybinding.
+func (m Model) runActionByKey(key string) (tea.Model, tea.Cmd) {
+	d := m.detail
+	if d == nil {
+		m.mode = modeDeployments
+		return m, nil
+	}
+	m.mode = modeDeployments // leave the action overlay
+	switch key {
+	case "l":
+		m.logs, m.logScroll = nil, 0
+		m.mode = modeLogs
+		return m, m.fetchLogs()
+	case "o":
+		return m, openBrowser("https://" + d.URL)
+	case "c":
+		return m, copyURL("https://" + d.URL)
+	case "x":
+		if d.Status() == "building" {
+			m.pending, m.pendingDep, m.confirmInput = pendCancel, *d, ""
+		}
+		return m, nil
+	case "R":
+		m.pending, m.pendingDep, m.confirmInput = pendRedeploy, *d, ""
+		return m, nil
+	case "B":
+		if d.Status() == "ready" && d.Target == "production" {
+			m.pending, m.pendingDep, m.confirmInput = pendRollback, *d, ""
+		}
+		return m, nil
+	case "D":
+		m.pending, m.pendingDep, m.confirmInput = pendDelete, *d, ""
+		return m, nil
+	}
+	return m, nil
+}
+
 func (m Model) loadCurrent() tea.Cmd {
 	switch m.mode {
 	case modeDeployments:
@@ -499,6 +615,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading, m.throttled = false, false
 		m.lastLoad = time.Now()
 		m.depCursor = clamp(m.depCursor, 0, max(len(m.displayRows())-1, 0))
+		// Fetch the selected row's detail immediately (1 fast request, always
+		// reliable) so its aliases show right away, then stage the rest.
+		if m.mode == modeDeployments && m.detailCache == nil {
+			m.detailCache = map[string]api.Deployment{}
+			if d := m.selectedDep(); d != nil {
+				return m, tea.Batch(m.fetchDetail(*d), m.fetchNextHeads())
+			}
+			return m, m.fetchNextHeads()
+		}
+
+	case detailsMsg:
+		if m.detailCache == nil {
+			m.detailCache = map[string]api.Deployment{}
+		}
+		for k, d := range msg.byKey {
+			m.detailCache[k] = d
+		}
+		// keep m.detail pointing at the selected deployment's enriched data
+		if m.mode == modeDeployments {
+			if cur := m.selectedDep(); cur != nil {
+				if d, ok := m.detailCache[cur.Key()]; ok {
+					m.detail = &d
+				}
+			}
+		}
+		// chain to the next batch of uncached project heads
+		if m.mode == modeDeployments {
+			if cmd := m.fetchNextHeads(); cmd != nil {
+				return m, tea.Sequence(sleep(1200*time.Millisecond), cmd)
+			}
+		}
 
 	case projectsMsg:
 		m.projects = msg.projects
@@ -516,13 +663,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.domains = msg.domains
 		m.loading, m.throttled = false, false
 		m.lastLoad = time.Now()
-
-	case detailMsg:
-		m.detail = msg.d
-		m.loading, m.throttled = false, false
-		if m.mode == modeDeployments {
-			m.mode = modeDetail
-		}
 
 	case logsMsg:
 		m.logs = msg.lines
@@ -743,19 +883,43 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.mode {
 	case modeDeployments:
 		rows := m.displayRows()
+		// fetchDetailCmd returns a command that enriches the selected row.
+		// refreshDetail reads the cache (populated by the batch fetch) so
+		// navigation is instant with no per-row requests.
+		refreshDetail := func() tea.Cmd {
+			if d := m.selectedDep(); d != nil {
+				if m.detailCache != nil {
+					if cached, ok := m.detailCache[d.Key()]; ok {
+						m.detail = &cached // cache hit: instant, no request
+						return nil
+					}
+				}
+				return m.fetchDetail(*d) // one request; cached on arrival
+			}
+			return nil
+		}
 		switch key {
 		case "j", "down":
 			m.depCursor = clamp(m.depCursor+1, 0, len(rows)-1)
+			return m, refreshDetail()
 		case "k", "up":
 			m.depCursor = clamp(m.depCursor-1, 0, len(rows)-1)
+			return m, refreshDetail()
 		case "g", "home":
 			m.depCursor = 0
+			return m, refreshDetail()
 		case "G", "end":
 			m.depCursor = len(rows) - 1
+			return m, refreshDetail()
 		case "enter":
 			if d := m.selectedDep(); d != nil {
-				return m, m.fetchDetail(*d)
+				if m.detail == nil || m.detail.Key() != d.Key() {
+					m.detail = d
+				}
+				m.mode = modeActions
+				m.actionCursor = 0
 			}
+			return m, nil
 		case "e":
 			if m.depCursor < len(rows) && rows[m.depCursor].project != "" {
 				if m.expanded == rows[m.depCursor].project {
@@ -833,29 +997,26 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case modeDetail:
-		switch key {
-		case "esc":
+	case modeActions:
+		if m.detail == nil {
 			m.mode = modeDeployments
-		case "l":
-			m.logs, m.logScroll = nil, 0
-			m.mode = modeLogs
-			return m, m.fetchLogs()
-		case "o":
-			return m, openBrowser("https://" + m.detail.URL)
-		case "c":
-			return m, copyURL("https://" + m.detail.URL)
-		case "x":
-			if m.detail.Status() == "building" {
-				m.pending, m.pendingDep, m.confirmInput = pendCancel, *m.detail, ""
-			}
-		case "D":
-			m.pending, m.pendingDep, m.confirmInput = pendDelete, *m.detail, ""
-		case "R":
-			m.pending, m.pendingDep, m.confirmInput = pendRedeploy, *m.detail, ""
-		case "B":
-			if m.detail.Status() == "ready" && m.detail.Target == "production" {
-				m.pending, m.pendingDep, m.confirmInput = pendRollback, *m.detail, ""
+			return m, nil
+		}
+		actions := m.deploymentActions()
+		switch key {
+		case "esc", "q":
+			m.mode = modeDeployments
+		case "j", "down":
+			m.actionCursor = clamp(m.actionCursor+1, 0, len(actions)-1)
+		case "k", "up":
+			m.actionCursor = clamp(m.actionCursor-1, 0, len(actions)-1)
+		case "g", "home":
+			m.actionCursor = 0
+		case "G", "end":
+			m.actionCursor = len(actions) - 1
+		case "enter":
+			if m.actionCursor < len(actions) {
+				return m.runActionByKey(actions[m.actionCursor].key)
 			}
 		}
 
@@ -894,10 +1055,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		maxScroll := max(len(m.logs)-(m.height-6), 0)
 		switch key {
 		case "esc":
-			m.mode = modeDetail
-			if m.detail == nil {
-				m.mode = modeDeployments
-			}
+			m.mode = modeDeployments
 		case "j", "down":
 			m.logScroll = clamp(m.logScroll-1, 0, maxScroll)
 		case "k", "up":
@@ -1019,6 +1177,31 @@ func (m Model) displayRows() []displayRow {
 		}
 	}
 	return rows
+}
+
+// projectGroups returns visible deployments grouped by project, newest
+// group first (matching display order). Each group keeps its deployments
+// newest-first.
+type projectGroup struct {
+	name        string
+	deployments []api.Deployment
+}
+
+func (m Model) projectGroups() []projectGroup {
+	deps := m.visibleDeps()
+	var order []string
+	byProj := map[string][]api.Deployment{}
+	for _, d := range deps {
+		if byProj[d.Name] == nil {
+			order = append(order, d.Name)
+		}
+		byProj[d.Name] = append(byProj[d.Name], d)
+	}
+	groups := make([]projectGroup, 0, len(order))
+	for _, name := range order {
+		groups = append(groups, projectGroup{name: name, deployments: byProj[name]})
+	}
+	return groups
 }
 
 // selectedDep returns the deployment at the cursor, or nil if the cursor
