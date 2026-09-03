@@ -170,6 +170,11 @@ func schedule(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
+// sleep is a command that simply waits; used to space out rate-limited fetches.
+func sleep(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg { return struct{}{} })
+}
+
 func fetchTeams(c *api.Client) tea.Cmd {
 	return func() tea.Msg {
 		u, err := c.User()
@@ -243,34 +248,35 @@ func (m Model) fetchDetail(d api.Deployment) tea.Cmd {
 	}
 }
 
-// fetchAllProjectDetails prefetches the detail (aliases) of each project's
-// head deployment, 3 at a time with a pause between batches, so Vercel's
-// rate limit doesn't choke it. Runs at session start; results are cached.
-func (m Model) fetchAllProjectDetails() tea.Cmd {
+// fetchNextHeads fetches up to 3 uncached project-head deployments at a
+// time (with a pause between each, staying under the rate limit), returning
+// them in one message so aliases appear after each batch rather than at the
+// very end. Chains to the next 3 on arrival.
+func (m Model) fetchNextHeads() tea.Cmd {
 	c, team := m.client, m.teamID()
 	var heads []api.Deployment
 	for _, g := range m.projectGroups() {
 		if len(g.deployments) > 0 {
-			heads = append(heads, g.deployments[0])
+			d := g.deployments[0]
+			if _, ok := m.detailCache[d.Key()]; !ok {
+				heads = append(heads, d)
+				if len(heads) >= 3 {
+					break
+				}
+			}
 		}
 	}
-	// only fetch heads we haven't already cached
-	var pending []api.Deployment
-	for _, d := range heads {
-		if _, ok := m.detailCache[d.Key()]; !ok {
-			pending = append(pending, d)
-		}
+	if len(heads) == 0 {
+		return nil
 	}
 	return func() tea.Msg {
 		byKey := map[string]api.Deployment{}
-		// one project per turn, pausing between, to stay under the rate limit
-		for _, d := range pending {
+		for _, d := range heads {
 			full, err := c.Deployment(d.Key(), team)
 			if err != nil {
 				continue
 			}
 			byKey[d.Key()] = *full
-			time.Sleep(1200 * time.Millisecond) // let the rate limit reset
 		}
 		return detailsMsg{byKey: byKey}
 	}
@@ -609,10 +615,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading, m.throttled = false, false
 		m.lastLoad = time.Now()
 		m.depCursor = clamp(m.depCursor, 0, max(len(m.displayRows())-1, 0))
-		// prefetch aliases for every project's head at session start, 3 at a
-		// time; afterwards navigation reads the cache.
-		if m.mode == modeDeployments && len(m.detailCache) == 0 {
-			return m, m.fetchAllProjectDetails()
+		// Fetch the selected row's detail immediately (1 fast request, always
+		// reliable) so its aliases show right away, then stage the rest.
+		if m.mode == modeDeployments && m.detailCache == nil {
+			m.detailCache = map[string]api.Deployment{}
+			if d := m.selectedDep(); d != nil {
+				return m, tea.Batch(m.fetchDetail(*d), m.fetchNextHeads())
+			}
+			return m, m.fetchNextHeads()
 		}
 
 	case detailsMsg:
@@ -628,6 +638,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if d, ok := m.detailCache[cur.Key()]; ok {
 					m.detail = &d
 				}
+			}
+		}
+		// chain to the next batch of uncached project heads
+		if m.mode == modeDeployments {
+			if cmd := m.fetchNextHeads(); cmd != nil {
+				return m, tea.Sequence(sleep(1200*time.Millisecond), cmd)
 			}
 		}
 
