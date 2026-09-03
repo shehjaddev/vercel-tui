@@ -169,7 +169,7 @@ func (m Model) topDetail() string {
 	line2 := ""
 	if msg := d.Message(); msg != "" {
 		msg = strings.ReplaceAll(msg, "\n", " ")
-		line2 = val(trunc(msg, max(m.width-10, 20))) + "\n"
+		line2 = dimStyle.Render("commit") + " " + val(trunc(msg, max(m.width-12, 24))) + "\n"
 	}
 
 	// line 3: author · created · ready · duration

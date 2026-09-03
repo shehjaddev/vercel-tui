@@ -570,11 +570,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading, m.throttled = false, false
 		m.lastLoad = time.Now()
 		m.depCursor = clamp(m.depCursor, 0, max(len(m.displayRows())-1, 0))
-		// enrich the selection with full detail (aliases etc.)
+		// keep enriched detail unless the selection changed
 		if m.mode == modeDeployments {
-			m.detail = nil
 			if d := m.selectedDep(); d != nil {
-				return m, m.fetchDetail(*d)
+				if m.detail == nil || m.detail.Key() != d.Key() {
+					m.detail = nil
+					return m, m.fetchDetail(*d)
+				}
+			} else {
+				m.detail = nil
 			}
 		}
 
@@ -824,10 +828,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		rows := m.displayRows()
 		// fetchDetailCmd returns a command that enriches the selected row.
 		refreshDetail := func() tea.Cmd {
-			m.detail = nil
 			if d := m.selectedDep(); d != nil {
+				if m.detail != nil && m.detail.Key() == d.Key() {
+					return nil // selection unchanged; keep enriched detail
+				}
+				m.detail = nil
 				return m.fetchDetail(*d)
 			}
+			m.detail = nil
 			return nil
 		}
 		switch key {
