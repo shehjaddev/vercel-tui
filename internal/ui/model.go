@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -225,44 +224,22 @@ func (m Model) fetchProjects() tea.Cmd {
 }
 
 // fetchAllDetails enriches every deployment in the list at once, so aliases
-// are available everywhere without per-row refetching. Runs concurrently with
-// a modest limit to avoid hammering the API.
-func (m Model) fetchAllDetails(deps []api.Deployment) tea.Cmd {
+// fetchDetail fetches one deployment's full detail (aliases) and caches it
+// keyed by id. It's fired only for the selected row — one request at a time,
+// which is all Vercel's rate limit reliably allows. Cached so returning to a
+// row is instant.
+func (m Model) fetchDetail(d api.Deployment) tea.Cmd {
+	c, id, team := m.client, d.UID, m.teamID()
+	if d.UID == "" {
+		id = d.ID
+	}
+	key := d.Key()
 	return func() tea.Msg {
-		byKey := map[string]api.Deployment{}
-		// collect the distinct deployments in the list
-		seen := map[string]bool{}
-		var targets []api.Deployment
-		for _, d := range deps {
-			if !seen[d.Key()] {
-				seen[d.Key()] = true
-				targets = append(targets, d)
-			}
+		full, err := c.Deployment(id, team)
+		if err != nil {
+			return errMsg{err}
 		}
-		sem := make(chan struct{}, 8)
-		var wg sync.WaitGroup
-		var mu sync.Mutex
-		for _, d := range targets {
-			wg.Add(1)
-			go func(d api.Deployment) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-				id := d.UID
-				if id == "" {
-					id = d.ID
-				}
-				full, err := m.client.Deployment(id, m.teamID())
-				if err != nil {
-					return // skip failures; row still shows list data
-				}
-				mu.Lock()
-				byKey[d.Key()] = *full
-				mu.Unlock()
-			}(d)
-		}
-		wg.Wait()
-		return detailsMsg{byKey: byKey}
+		return detailsMsg{byKey: map[string]api.Deployment{key: *full}}
 	}
 }
 
@@ -599,11 +576,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading, m.throttled = false, false
 		m.lastLoad = time.Now()
 		m.depCursor = clamp(m.depCursor, 0, max(len(m.displayRows())-1, 0))
-		// fetch detail (aliases) for every deployment once, so navigation is
-		// instant and aliases are available everywhere.
+		// Fetch the selected row's detail (aliases) only when not already
+		// cached, so ordinary polls don't cause a 1s aliases-flicker. The
+		// cache returns instant on re-selection.
 		if m.mode == modeDeployments {
-			m.detail = nil
-			return m, m.fetchAllDetails(m.deps)
+			if d := m.selectedDep(); d != nil {
+				if _, cached := m.detailCache[d.Key()]; !cached {
+					return m, m.fetchDetail(*d)
+				}
+			}
 		}
 
 	case detailsMsg:
@@ -865,15 +846,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if d := m.selectedDep(); d != nil {
 				if m.detailCache != nil {
 					if cached, ok := m.detailCache[d.Key()]; ok {
-						m.detail = &cached
-					} else {
-						m.detail = nil // batch still loading; list data shows
+						m.detail = &cached // cache hit: instant, no request
+						return nil
 					}
-				} else {
-					m.detail = nil
 				}
-			} else {
-				m.detail = nil
+				return m.fetchDetail(*d) // one request; cached on arrival
 			}
 			return nil
 		}

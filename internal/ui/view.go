@@ -147,9 +147,11 @@ func (m Model) topDetail() string {
 	if d == nil {
 		return ""
 	}
-	// prefer the enriched detail (aliases etc.) when it matches the selection
-	if m.detail != nil && m.detail.Key() == d.Key() {
-		d = m.detail
+	// prefer the cached enriched detail (aliases etc.) for this selection
+	if m.detailCache != nil {
+		if cached, ok := m.detailCache[d.Key()]; ok {
+			d = &cached
+		}
 	}
 
 	val := func(s string) string {
