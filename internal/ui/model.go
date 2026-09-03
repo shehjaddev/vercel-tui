@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -45,6 +46,7 @@ type Model struct {
 
 	projectID, orgID       string
 	targetFlag, branchFlag string
+	dir                    string // dir holding .vercel/project.json (link scope)
 
 	mode    mode
 	user    string
@@ -139,14 +141,18 @@ const (
 	pendDeleteEnv
 )
 
-func New(client *api.Client, authed bool, refresh time.Duration, link *config.ProjectLink, target, branch string) Model {
+func New(client *api.Client, authed bool, refresh time.Duration, link *config.ProjectLink, target, branch, dir string) Model {
 	m := Model{
 		client:     client,
 		authed:     authed,
 		refresh:    refresh,
 		targetFlag: target,
 		branchFlag: branch,
+		dir:        dir,
 		mode:       modeDeployments,
+	}
+	if m.dir == "" {
+		m.dir = "."
 	}
 	if link != nil {
 		m.projectID = link.ProjectID
@@ -233,6 +239,14 @@ func (m Model) fetchProjects() tea.Cmd {
 // keyed by id. It's fired only for the selected row — one request at a time,
 // which is all Vercel's rate limit reliably allows. Cached so returning to a
 // row is instant.
+func (m Model) unlinkCmd() (Model, tea.Cmd) {
+	// drop the persisted .vercel/project.json (written by L) and clear any
+	// in-memory project filter so the deployments view shows every project.
+	_ = os.Remove(filepath.Join(m.dir, ".vercel", "project.json"))
+	m.projectID = ""
+	return m, m.fetchDeps()
+}
+
 func (m Model) fetchDetail(d api.Deployment) tea.Cmd {
 	c, id, team := m.client, d.UID, m.teamID()
 	if d.UID == "" {
@@ -933,6 +947,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.grouped = !m.grouped
 			m.depCursor = 0
 			m.expanded = ""
+		case "U":
+			if m.projectID != "" {
+				return m.unlinkCmd()
+			}
 		case "x":
 			if d := m.selectedDep(); d != nil && d.Status() == "building" {
 				m.pending, m.pendingDep, m.confirmInput = pendCancel, *d, ""
@@ -991,9 +1009,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				p := m.projects[m.projCursor]
 				org := m.teamID()
 				return m, func() tea.Msg {
-					err := config.WriteProjectLink(".", p.ID, org)
-					return actionMsg{text: "linked " + p.Name + " to ./vercel/project.json", err: err}
+					err := config.WriteProjectLink(m.dir, p.ID, org)
+					return actionMsg{text: "linked " + p.Name + " (" + filepath.Join(m.dir, ".vercel/project.json") + ")", err: err}
 				}
+			}
+		case "U":
+			if m.projCursor < len(m.projects) {
+				return m.unlinkCmd()
 			}
 		}
 

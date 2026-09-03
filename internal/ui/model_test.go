@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,7 +13,7 @@ import (
 
 // Regression for BUG-1: typed-confirm dialogs must collect keystrokes.
 func TestConfirmDialogCollectsTyping(t *testing.T) {
-	m := New(api.New("tok"), true, 0, nil, "", "")
+	m := New(api.New("tok"), true, 0, nil, "", "", ".")
 	m.width, m.height = 80, 24
 	m.pending, m.pendingDep = pendDelete, api.Deployment{Name: "web", UID: "dpl_1"}
 	for _, k := range strings.Split("we", "") {
@@ -39,7 +41,7 @@ func TestConfirmDialogCollectsTyping(t *testing.T) {
 // Regression for BUG-2: enter on a deployment opens the actions menu,
 // not a detail view.
 func TestEnterOpensActions(t *testing.T) {
-	m := New(api.New("tok"), true, 0, nil, "", "")
+	m := New(api.New("tok"), true, 0, nil, "", "", ".")
 	m.width, m.height = 80, 24
 	m.mode = modeDeployments
 	m.deps = []api.Deployment{{Name: "web", UID: "dpl_1", URL: "web.vercel.sh", State: "READY", Target: "production"}}
@@ -56,7 +58,7 @@ func TestEnterOpensActions(t *testing.T) {
 
 // The top detail block must surface aliases from the enriched detail.
 func TestAliasInTopDetail(t *testing.T) {
-	m := New(api.New("tok"), true, 0, nil, "", "")
+	m := New(api.New("tok"), true, 0, nil, "", "", ".")
 	m.width = 168
 	m.deps = []api.Deployment{{
 		UID: "dpl_1", Name: "shehjad", State: "READY", Target: "production",
@@ -74,5 +76,26 @@ func TestAliasInTopDetail(t *testing.T) {
 	out := m.topDetail()
 	if !strings.Contains(out, "aliases") || !strings.Contains(out, "www.shehjad.dev") {
 		t.Fatalf("aliases missing in top detail:\n%s", out)
+	}
+}
+
+func TestUnlinkClearsScopeAndFile(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, ".vercel", "project.json")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(link, []byte(`{"projectId":"prj_x","orgId":"org_y"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := New(api.New("tok"), true, 0, nil, "", "", dir)
+	m.projectID = "prj_x"
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'U'}})
+	got := model.(Model)
+	if got.projectID != "" {
+		t.Fatalf("projectID not cleared: %q", got.projectID)
+	}
+	if _, err := os.Stat(link); !os.IsNotExist(err) {
+		t.Fatalf("link file should be removed: %v", err)
 	}
 }
