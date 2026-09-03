@@ -300,11 +300,12 @@ func (m Model) actionsView() string {
 	var out strings.Builder
 	out.WriteString(titleStyle.Render("Actions — "+d.Name) + "\n\n")
 	for i, a := range actions {
-		mark := "  "
+		line := a.label + dimStyle.Render("  ("+a.key+")")
 		if i == m.actionCursor {
-			mark = "❯ "
+			out.WriteString(selectedStyle.Render("❯ "+line) + "\n")
+		} else {
+			out.WriteString("  " + line + "\n")
 		}
-		out.WriteString(mark + a.label + dimStyle.Render("  ("+a.key+")") + "\n")
 	}
 	out.WriteString("\n" + dimStyle.Render("enter run · j/k move · esc back"))
 	return out.String()
@@ -476,7 +477,7 @@ func (m Model) helpView() string {
 func (m Model) footer() string {
 	hints := map[mode]string{
 		modeLogin:       "type/paste token · enter save · o open browser · q quit",
-		modeDeployments: "j/k move · e env vars · L link to dir · enter actions · l logs · a all/list · E expand · U unlink · x cancel · R redeploy · B rollback · D delete · / filter · s state · t team · c copy · o open · ? help · q quit",
+		modeDeployments: "j/k move · a all/list · E expand · / filter · s state · enter actions · l logs · e env vars · L link to dir · U unlink · R redeploy · D delete · c copy · o open · t team · ? help · q quit",
 		modeActions:     "j/k move · enter run · esc back · q quit",
 		modeEnvs:        "j/k move · n new · e edit value · d delete · esc back · q quit",
 	}
@@ -528,7 +529,7 @@ func pad(s string, w int) string {
 
 func marker(selected bool) string {
 	if selected {
-		return ">"
+		return "❯"
 	}
 	return ""
 }
