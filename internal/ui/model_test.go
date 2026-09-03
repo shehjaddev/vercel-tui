@@ -65,11 +65,11 @@ func TestAliasInTopDetail(t *testing.T) {
 	}}
 	m.depCursor = 0
 	m.mode = modeDeployments
-	model, _ := m.Update(detailMsg{d: &api.Deployment{
+	model, _ := m.Update(detailsMsg{byKey: map[string]api.Deployment{"dpl_1": {
 		UID: "dpl_1", Name: "shehjad", State: "READY", Target: "production",
 		URL: "shehjad-x.vercel.app", Alias: []string{"www.shehjad.dev"},
 		Meta: map[string]string{"githubCommitRef": "main", "githubCommitSha": "a7764a7", "githubCommitMessage": "msg"},
-	}})
+	}}})
 	m = model.(Model)
 	out := m.topDetail()
 	if !strings.Contains(out, "aliases") || !strings.Contains(out, "www.shehjad.dev") {

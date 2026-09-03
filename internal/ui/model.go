@@ -59,6 +59,7 @@ type Model struct {
 	projects     []api.Project
 	projCursor   int
 	detail       *api.Deployment
+	detailCache  map[string]api.Deployment // enriched detail by deployment key
 	logs         []string
 	logScroll    int // lines back from the bottom; 0 means following
 
@@ -112,6 +113,7 @@ type teamsMsg struct {
 type depsMsg struct{ deps []api.Deployment }
 type projectsMsg struct{ projects []api.Project }
 type detailMsg struct{ d *api.Deployment }
+type detailsMsg struct{ byKey map[string]api.Deployment }
 type logsMsg struct{ lines []string }
 type tokenOkMsg struct {
 	user  string
@@ -222,18 +224,20 @@ func (m Model) fetchProjects() tea.Cmd {
 }
 
 // fetchDetail enriches a deployment with full data (aliases etc.) from the
-// detail endpoint, which the list response does not carry.
+// detail endpoint, which the list response does not carry. Results land in
+// the detail cache, so they're reusable without refetching on navigation.
 func (m Model) fetchDetail(d api.Deployment) tea.Cmd {
 	c, id, team := m.client, d.UID, m.teamID()
 	if d.UID == "" {
 		id = d.ID
 	}
+	key := d.Key()
 	return func() tea.Msg {
 		full, err := c.Deployment(id, team)
 		if err != nil {
 			return errMsg{err}
 		}
-		return detailMsg{full}
+		return detailsMsg{byKey: map[string]api.Deployment{key: *full}}
 	}
 }
 
@@ -570,23 +574,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading, m.throttled = false, false
 		m.lastLoad = time.Now()
 		m.depCursor = clamp(m.depCursor, 0, max(len(m.displayRows())-1, 0))
-		// keep enriched detail unless the selection changed
+		// refresh the selected row's detail each poll so aliases stay current;
+		// the cache keeps previously-viewed rows with no refetch.
 		if m.mode == modeDeployments {
 			if d := m.selectedDep(); d != nil {
 				if m.detail == nil || m.detail.Key() != d.Key() {
 					m.detail = nil
-					return m, m.fetchDetail(*d)
 				}
-			} else {
-				m.detail = nil
+				return m, m.fetchDetail(*d)
 			}
+			m.detail = nil
 		}
 
-	case detailMsg:
-		// only accept the enriched detail if it's still the selected deployment
+	case detailsMsg:
+		if m.detailCache == nil {
+			m.detailCache = map[string]api.Deployment{}
+		}
+		for k, d := range msg.byKey {
+			m.detailCache[k] = d
+		}
+		// keep m.detail pointing at the selected deployment's enriched data
 		if m.mode == modeDeployments {
-			if cur := m.selectedDep(); cur != nil && msg.d.Key() == cur.Key() {
-				m.detail = msg.d
+			if cur := m.selectedDep(); cur != nil {
+				if d, ok := m.detailCache[cur.Key()]; ok {
+					m.detail = &d
+				}
 			}
 		}
 
@@ -827,10 +839,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeDeployments:
 		rows := m.displayRows()
 		// fetchDetailCmd returns a command that enriches the selected row.
+		// refreshDetail reads from the cache for instant navigation, fetching
+		// only when the row hasn't been viewed yet.
 		refreshDetail := func() tea.Cmd {
 			if d := m.selectedDep(); d != nil {
-				if m.detail != nil && m.detail.Key() == d.Key() {
-					return nil // selection unchanged; keep enriched detail
+				if m.detailCache != nil {
+					if cached, ok := m.detailCache[d.Key()]; ok {
+						m.detail = &cached
+						return nil
+					}
 				}
 				m.detail = nil
 				return m.fetchDetail(*d)
