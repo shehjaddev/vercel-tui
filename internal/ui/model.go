@@ -20,7 +20,6 @@ type mode int
 const (
 	modeLogin mode = iota
 	modeDeployments
-	modeProjects
 	modeActions
 	modeLogs
 	modeEnvs
@@ -57,8 +56,6 @@ type Model struct {
 	actionCursor int
 	grouped      bool   // default: one row per project, expandable
 	expanded     string // project name currently expanded ("" = none)
-	projects     []api.Project
-	projCursor   int
 	detail       *api.Deployment
 	detailCache  map[string]api.Deployment // enriched detail by deployment key
 	domainCache  map[string][]string       // project domains by project id
@@ -112,7 +109,6 @@ type teamsMsg struct {
 	teams []api.Team
 }
 type depsMsg struct{ deps []api.Deployment }
-type projectsMsg struct{ projects []api.Project }
 type detailMsg struct{ d *api.Deployment }
 type detailsMsg struct{ byKey map[string]api.Deployment }
 type logsMsg struct{ lines []string }
@@ -218,18 +214,6 @@ func (m Model) fetchDeps() tea.Cmd {
 			return errMsg{err}
 		}
 		return depsMsg{deps}
-	}
-}
-
-func (m Model) fetchProjects() tea.Cmd {
-	m.loading = true
-	c, team := m.client, m.teamID()
-	return func() tea.Msg {
-		ps, err := c.Projects(team, 200)
-		if err != nil {
-			return errMsg{err}
-		}
-		return projectsMsg{ps}
 	}
 }
 
@@ -612,8 +596,6 @@ func (m Model) loadCurrent() tea.Cmd {
 	switch m.mode {
 	case modeDeployments:
 		return m.fetchDeps()
-	case modeProjects:
-		return m.fetchProjects()
 	case modeEnvs:
 		return m.fetchEnvs()
 	case modeLogs:
@@ -708,12 +690,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case projectsMsg:
-		m.projects = msg.projects
-		m.loading, m.throttled = false, false
-		m.lastLoad = time.Now()
-		m.projCursor = clamp(m.projCursor, 0, max(len(m.projects)-1, 0))
-
 	case envsMsg:
 		m.envs = msg.envs
 		m.loading, m.throttled = false, false
@@ -805,7 +781,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.filterFocus {
 		switch key {
 		case "enter":
-			m.filter, m.filterFocus, m.depCursor, m.projCursor = m.filterBuf, false, 0, 0
+			m.filter, m.filterFocus, m.depCursor = m.filterBuf, false, 0
 		case "esc":
 			m.filterBuf, m.filterFocus = "", false
 		case "backspace":
@@ -903,7 +879,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if m.teamCursor != m.teamIdx {
 				m.teamIdx = m.teamCursor
-				m.depCursor, m.projCursor = 0, 0
+				m.depCursor = 0
 				m.teamSel = false
 				return m, m.loadCurrent()
 			}
@@ -917,12 +893,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "?":
 		m.help = true
-	case "1":
-		m.mode = modeDeployments
-		return m, m.loadCurrent()
-	case "2":
-		m.mode = modeProjects
-		return m, m.loadCurrent()
 	case "t":
 		if len(m.teams) > 1 {
 			m.teamSel, m.teamCursor = true, m.teamIdx
@@ -932,7 +902,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.loadCurrent()
 	case "/":
 		switch m.mode {
-		case modeDeployments, modeProjects:
+		case modeDeployments:
 			m.filterFocus, m.filterBuf = true, m.filter
 		case modeLogs:
 			m.searchFocus, m.searchBuf = true, m.search
@@ -1017,6 +987,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.envCursor = 0
 				return m, m.fetchEnvs()
 			}
+		case "E":
+			if m.depCursor < len(rows) && rows[m.depCursor].project != "" {
+				if m.expanded == rows[m.depCursor].project {
+					m.expanded = ""
+				} else {
+					m.expanded = rows[m.depCursor].project
+				}
+				return m, nil
+			}
 		case "L":
 			if d := m.selectedDep(); d != nil {
 				pid := ""
@@ -1074,41 +1053,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case modeProjects:
-		switch key {
-		case "j", "down":
-			m.projCursor = clamp(m.projCursor+1, 0, len(m.projects)-1)
-		case "k", "up":
-			m.projCursor = clamp(m.projCursor-1, 0, len(m.projects)-1)
-		case "enter":
-			if m.projCursor < len(m.projects) {
-				m.projectID = m.projects[m.projCursor].ID
-				m.mode = modeDeployments
-				m.depCursor = 0
-				return m, m.fetchDeps()
-			}
-		case "e":
-			if m.projCursor < len(m.projects) {
-				m.envProject = m.projects[m.projCursor]
-				m.mode = modeEnvs
-				m.envCursor = 0
-				return m, m.fetchEnvs()
-			}
-		case "L":
-			if m.projCursor < len(m.projects) {
-				p := m.projects[m.projCursor]
-				org := m.teamID()
-				return m, func() tea.Msg {
-					err := config.WriteProjectLink(m.dir, p.ID, org)
-					return actionMsg{text: "linked " + p.Name + " (" + filepath.Join(m.dir, ".vercel/project.json") + ")", err: err}
-				}
-			}
-		case "U":
-			if m.projCursor < len(m.projects) {
-				return m.unlinkCmd()
-			}
-		}
-
 	case modeActions:
 		if m.detail == nil {
 			m.mode = modeDeployments
@@ -1135,7 +1079,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeEnvs:
 		switch key {
 		case "esc":
-			m.mode = modeProjects
+			m.mode = modeDeployments
 		case "j", "down":
 			m.envCursor = clamp(m.envCursor+1, 0, len(m.envs)-1)
 		case "k", "up":

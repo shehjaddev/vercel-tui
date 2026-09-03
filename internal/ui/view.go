@@ -51,8 +51,6 @@ func (m Model) View() string {
 			b.WriteString(m.loginView())
 		case modeDeployments:
 			b.WriteString(m.deploymentsView())
-		case modeProjects:
-			b.WriteString(m.projectsView())
 		case modeActions:
 			b.WriteString(m.actionsView())
 		case modeLogs:
@@ -293,49 +291,6 @@ func (m Model) depWidths() []int {
 	return base
 }
 
-func (m Model) projectsView() string {
-	if len(m.projects) == 0 {
-		return dimStyle.Render("no projects") + "\n"
-	}
-	widths := m.projWidths()
-	rows := []string{headerStyle.Render(row(widths, "", "PROJECT", "FRAMEWORK", "REPO", "LAST ACTIVITY"))}
-	maxRows := max(m.height-8, 1)
-	start := clamp(m.projCursor-maxRows+2, 0, max(len(m.projects)-maxRows, 0))
-	for i := start; i < min(start+maxRows, len(m.projects)); i++ {
-		p := m.projects[i]
-		cells := []string{
-			marker(i == m.projCursor),
-			trunc(p.Name, widths[1]),
-			trunc(p.Framework, widths[2]),
-			trunc(p.Repo(), widths[3]),
-			relAge(p.UpdatedAt),
-		}
-		line := row(widths, cells...)
-		if i == m.projCursor {
-			line = selectedStyle.Render(line)
-		}
-		rows = append(rows, line)
-	}
-	return strings.Join(rows, "\n") + "\n"
-}
-
-// projWidths spreads spare width into PROJECT and REPO so long repo paths
-// and empty cells read as aligned columns rather than ragged holes.
-func (m Model) projWidths() []int {
-	base := []int{1, 27, 17, 33, 12}
-	if m.width <= 0 {
-		return base
-	}
-	total := 0
-	for _, w := range base {
-		total += w
-	}
-	if spare := m.width - total - 1; spare > 0 {
-		base[1] += spare
-	}
-	return base
-}
-
 func (m Model) actionsView() string {
 	d := m.detail
 	if d == nil {
@@ -501,10 +456,9 @@ func (m Model) helpView() string {
 	return strings.Join([]string{
 		titleStyle.Render("Keys"),
 		"",
-		"1/2      deployments / projects",
 		"j k g G  navigate",
 		"enter    open actions for selected deployment",
-		"e        expand the selected project's deployments",
+		"E        expand the selected project's deployments",
 		"a        toggle: grouped-by-project vs all deployments",
 		"l        live logs of the selected deployment",
 		"/        filter (lists) or log search   n  next match",
@@ -522,8 +476,7 @@ func (m Model) helpView() string {
 func (m Model) footer() string {
 	hints := map[mode]string{
 		modeLogin:       "type/paste token · enter save · o open browser · q quit",
-		modeDeployments: "j/k move · e env vars · L link to dir · enter actions · l logs · a all/list · U unlink · x cancel · R redeploy · B rollback · D delete · / filter · s state · t team · c copy · o open · ? help · q quit",
-		modeProjects:    "j/k move · enter scope · e env vars · L link to dir · U unlink · / filter · t team · ? help · q quit",
+		modeDeployments: "j/k move · e env vars · L link to dir · enter actions · l logs · a all/list · E expand · U unlink · x cancel · R redeploy · B rollback · D delete · / filter · s state · t team · c copy · o open · ? help · q quit",
 		modeActions:     "j/k move · enter run · esc back · q quit",
 		modeEnvs:        "j/k move · n new · e edit value · d delete · esc back · q quit",
 	}
