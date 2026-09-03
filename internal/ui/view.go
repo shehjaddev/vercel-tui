@@ -12,7 +12,7 @@ import (
 
 var (
 	titleStyle    = lipgloss.NewStyle().Bold(true)
-	selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	selectedStyle = lipgloss.NewStyle().Bold(true).Background(lipgloss.Color("238"))
 	headerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
@@ -101,30 +101,21 @@ func (m Model) statusBar() string {
 }
 
 func (m Model) deploymentsView() string {
-	groups := m.projectGroups()
-	if len(groups) == 0 {
+	rows := m.displayRows()
+	if len(rows) == 0 {
 		return dimStyle.Render("no deployments match") + "\n"
 	}
 
-	// --- project status strip (signature element) ---
-	var chips []string
-	for _, g := range groups {
-		chips = append(chips, m.projectChip(g))
-	}
-	strip := strings.Join(chips, "  ")
-	strip = trunc(strip, max(m.width-4, 10))
+	// --- top detail block (pinned, 2-3 lines) ---
+	detail := m.topDetail()
 
-	// --- body: grouped rows ---
+	// --- list ---
 	widths := m.boardWidths()
 	var body []string
 	body = append(body, headerStyle.Render(row(widths, "", "PROJECT", "STATE", "BRANCH", "COMMIT", "AGE")))
-	maxRows := max(m.height-10, 1)
-	start := clamp(m.depCursor-maxRows+2, 0, max(len(m.displayRows())-maxRows, 0))
-	_ = start
-
-	// simple sequential render of display rows (project heads + expanded children)
-	rows := m.displayRows()
-	for i := 0; i < len(rows); i++ {
+	maxRows := max(m.height-9, 1)
+	start := clamp(m.depCursor-maxRows+2, 0, max(len(rows)-maxRows, 0))
+	for i := start; i < min(start+maxRows, len(rows)); i++ {
 		r := rows[i]
 		var cells []string
 		if r.project != "" {
@@ -135,7 +126,7 @@ func (m Model) deploymentsView() string {
 			}
 			cells = m.boardHeadCells(r.project, latest, widths, m.expanded == r.project)
 		} else if r.dep != nil {
-			cells = m.boardChildCells(*r.dep, widths, i)
+			cells = m.boardChildCells(*r.dep, widths)
 		}
 		line := row(widths, cells...)
 		if i == m.depCursor {
@@ -146,33 +137,44 @@ func (m Model) deploymentsView() string {
 
 	list := strings.Join(body, "\n")
 
-	// --- bottom detail panel; overview stays clean ---
-	detail := m.boardDetailPane()
+	return detail + "\n" + list
+}
 
-	head := titleStyle.Render("OPERATIONS") + dimStyle.Render("  ") + dimStyle.Render(rel(time.Now().Sub(m.lastLoad)))
-	head += "\n" + strip
+// topDetail is a pinned 2-3 line block showing the selected deployment.
+func (m Model) topDetail() string {
+	d := m.selectedDep()
+	if d == nil {
+		return ""
+	}
 
-	return head + "\n\n" + list + "\n" + detail
+	// line 1: name · sha · titled state · branch · target
+	line1 := titleStyle.Render(d.Name) + "  " +
+		dimStyle.Render(d.ShortSHA()) + "  " +
+		stateStyle[d.Status()].Render(strings.ToUpper(d.Status())) + "  " +
+		dimStyle.Render(d.Branch()) + "  " +
+		dimStyle.Render(targetLabel(d.Target))
+
+	// line 2: message (single line, collapse embedded newlines)
+	line2 := ""
+	if msg := d.Message(); msg != "" {
+		msg = strings.ReplaceAll(msg, "\n", " ")
+		line2 = dimStyle.Render(trunc(msg, max(m.width-8, 20))) + "\n"
+	}
+
+	// line 3: author · created · duration
+	parts := []string{
+		dimStyle.Render("Author " + d.Creator.Username),
+		dimStyle.Render("Created " + absTime(d.CreatedMs())),
+	}
+	if t := d.ReadyMs(); t > 0 {
+		parts = append(parts, dimStyle.Render("Build "+duration(d.Duration())))
+	}
+	line3 := strings.Join(parts, "   ")
+
+	return line1 + "\n" + line2 + line3
 }
 
 // projectChip renders one project's recent deploy-state distribution.
-func (m Model) projectChip(g projectGroup) string {
-	max := 6
-	if len(g.deployments) < max {
-		max = len(g.deployments)
-	}
-	var b strings.Builder
-	for i := 0; i < max; i++ {
-		st := g.deployments[i].Status()
-		glyph := "●"
-		if st == "canceled" || st == "queued" {
-			glyph = "○"
-		}
-		b.WriteString(stateStyle[st].Render(glyph))
-	}
-	return dimStyle.Render(g.name) + " " + b.String()
-}
-
 func (m Model) groupByName(name string) projectGroup {
 	for _, g := range m.projectGroups() {
 		if g.name == name {
@@ -211,41 +213,16 @@ func (m Model) boardHeadCells(project string, latest *api.Deployment, widths []i
 	}
 }
 
-func (m Model) boardChildCells(d api.Deployment, widths []int, index int) []string {
+func (m Model) boardChildCells(d api.Deployment, widths []int) []string {
 	st := d.Status()
 	return []string{
-		marker(index == m.depCursor),
+		"  ",
 		"  " + trunc(d.Name, widths[1]-6),
 		stateStyle[st].Render(strings.ToUpper(st)),
 		trunc(d.Branch(), widths[3]),
 		trunc(d.ShortSHA(), widths[4]),
 		relAge(d.CreatedMs()),
 	}
-}
-
-func (m Model) boardDetailPane() string {
-	d := m.selectedDep()
-	if d == nil {
-		return ""
-	}
-	sep := dimStyle.Render(strings.Repeat("─", 40))
-	var out strings.Builder
-	out.WriteString(sep + "\n")
-	out.WriteString(titleStyle.Render(d.Name) + "  " + dimStyle.Render(d.ShortSHA()) + "\n")
-	out.WriteString(dimStyle.Render(trunc(d.Message(), 48)) + "\n")
-	out.WriteString("\n")
-	label := func(k, v string) string {
-		return dimStyle.Render(fmt.Sprintf("%-10s", k)) + "  " + v + "\n"
-	}
-	out.WriteString(label("Status", stateStyle[d.Status()].Render(strings.ToUpper(d.Status()))))
-	out.WriteString(label("Target", targetLabel(d.Target)))
-	out.WriteString(label("Branch", d.Branch()))
-	out.WriteString(label("Author", d.Creator.Username))
-	out.WriteString(label("Created", absTime(d.CreatedMs())))
-	if t := d.ReadyMs(); t > 0 {
-		out.WriteString(label("Duration", duration(d.Duration())))
-	}
-	return out.String()
 }
 
 // depWidths returns column widths, distributing spare horizontal space into
