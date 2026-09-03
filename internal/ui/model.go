@@ -24,7 +24,6 @@ const (
 	modeActions
 	modeLogs
 	modeEnvs
-	modeDomains
 )
 
 var stateFilters = []string{"", "building", "ready", "error", "canceled", "queued"}
@@ -75,7 +74,6 @@ type Model struct {
 	envField   int // 0 = key, 1 = value
 	envPreset  int
 	envEditID  string // non-empty while editing an existing var
-	domains    []api.Domain
 
 	filterFocus bool
 	filterBuf   string
@@ -128,11 +126,7 @@ type actionMsg struct {
 	reload bool // whether success should trigger a data refresh
 }
 type envsMsg struct{ envs []api.EnvVar }
-type domainsMsg struct{ domains []api.Domain }
-type projDomainsMsg struct {
-	projectID string
-	domains   []api.Domain
-}
+type projDomainsMsg struct{ domains map[string][]string }
 type errMsg struct{ err error }
 
 type pendingAction int
@@ -272,15 +266,59 @@ func (m Model) fetchDetail(d api.Deployment) tea.Cmd {
 func (m Model) fetchProjectDomains(projectID string) tea.Cmd {
 	c, team := m.client, m.teamID()
 	return func() tea.Msg {
-		domains, err := c.ProjectDomains(projectID, team)
-		if err != nil {
-			return projDomainsMsg{projectID: projectID, domains: nil}
+		domains := map[string][]string{}
+		if ds, err := c.ProjectDomains(projectID, team); err == nil {
+			for _, d := range ds {
+				domains[projectID] = append(domains[projectID], d.Name)
+			}
 		}
-		return projDomainsMsg{projectID: projectID, domains: domains}
+		return projDomainsMsg{domains: domains}
 	}
 }
 
-// fetchNextHeads fetches up to 3 uncached project-head deployments at a
+// fetchNextDomains prefetches project domains in lockstep with the alias
+// prefetch: for each project head whose enriched detail we already hold, it
+// fetches up to 3 uncached project domains per batch (with a pause between
+// each, staying under the rate limit) and chains to the next batch. Every
+// project is fetched once and cached, so navigation never re-requests.
+func (m Model) fetchNextDomains() tea.Cmd {
+	c, team := m.client, m.teamID()
+	var pids []string
+	for _, g := range m.projectGroups() {
+		if len(g.deployments) == 0 {
+			continue
+		}
+		pid := ""
+		if cached, ok := m.detailCache[g.deployments[0].Key()]; ok {
+			pid = cached.Project.ID
+		}
+		if pid == "" || m.domainCache[pid] != nil {
+			continue
+		}
+		pids = append(pids, pid)
+		if len(pids) >= 3 {
+			break
+		}
+	}
+	if len(pids) == 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		domains := map[string][]string{}
+		for i, pid := range pids {
+			if ds, err := c.ProjectDomains(pid, team); err == nil {
+				for _, d := range ds {
+					domains[pid] = append(domains[pid], d.Name)
+				}
+			}
+			if i < len(pids)-1 {
+				time.Sleep(1200 * time.Millisecond)
+			}
+		}
+		return projDomainsMsg{domains: domains}
+	}
+}
+
 // time (with a pause between each, staying under the rate limit), returning
 // them in one message so aliases appear after each batch rather than at the
 // very end. Chains to the next 3 on arrival.
@@ -346,21 +384,6 @@ func (m Model) fetchEnvs() tea.Cmd {
 			return errMsg{err}
 		}
 		return envsMsg{envs}
-	}
-}
-
-func (m Model) fetchDomains() tea.Cmd {
-	m.loading = true
-	c, team, project := m.client, m.teamID(), m.projectID
-	return func() tea.Msg {
-		domains, err := c.ProjectDomains(project, team)
-		if err != nil {
-			domains, err = c.TeamDomains(team)
-			if err != nil {
-				return errMsg{err}
-			}
-		}
-		return domainsMsg{domains}
 	}
 }
 
@@ -593,8 +616,6 @@ func (m Model) loadCurrent() tea.Cmd {
 		return m.fetchProjects()
 	case modeEnvs:
 		return m.fetchEnvs()
-	case modeDomains:
-		return m.fetchDomains()
 	case modeLogs:
 		return m.fetchLogs()
 	}
@@ -672,16 +693,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		// fetch the selected project's domains once we have its id
-		if m.mode == modeDeployments && m.detail != nil && m.detail.Project.ID != "" {
-			if _, ok := m.domainCache[m.detail.Project.ID]; !ok {
-				return m, m.fetchProjectDomains(m.detail.Project.ID)
-			}
-		}
-		// chain to the next batch of uncached project heads
+		// prefetch domains in lockstep with aliases: chain both, each in its
+		// own staged batches, so every project's domains populate like aliases.
 		if m.mode == modeDeployments {
-			if cmd := m.fetchNextHeads(); cmd != nil {
-				return m, tea.Sequence(sleep(1200*time.Millisecond), cmd)
+			var cmds []tea.Cmd
+			if h := m.fetchNextHeads(); h != nil {
+				cmds = append(cmds, tea.Sequence(sleep(1200*time.Millisecond), h))
+			}
+			if d := m.fetchNextDomains(); d != nil {
+				cmds = append(cmds, tea.Sequence(sleep(400*time.Millisecond), d))
+			}
+			if len(cmds) > 0 {
+				return m, tea.Batch(cmds...)
 			}
 		}
 
@@ -697,20 +720,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastLoad = time.Now()
 		m.envCursor = clamp(m.envCursor, 0, max(len(m.envs)-1, 0))
 
-	case domainsMsg:
-		m.domains = msg.domains
-		m.loading, m.throttled = false, false
-		m.lastLoad = time.Now()
-
 	case projDomainsMsg:
 		if m.domainCache == nil {
 			m.domainCache = map[string][]string{}
 		}
-		names := make([]string, 0, len(msg.domains))
-		for _, d := range msg.domains {
-			names = append(names, d.Name)
+		for pid, names := range msg.domains {
+			m.domainCache[pid] = names
 		}
-		m.domainCache[msg.projectID] = names
+		if m.mode == modeDeployments {
+			if cmd := m.fetchNextDomains(); cmd != nil {
+				return m, tea.Sequence(sleep(400*time.Millisecond), cmd)
+			}
+		}
 
 	case logsMsg:
 		m.logs = msg.lines
@@ -894,9 +915,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case "q", "ctrl+c":
 		return m, tea.Quit
-	case "3":
-		m.mode = modeDomains
-		return m, m.fetchDomains()
 	case "?":
 		m.help = true
 	case "1":
@@ -1120,9 +1138,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.pending, m.pendingEnv, m.confirmInput = pendDeleteEnv, m.envs[m.envCursor], ""
 			}
 		}
-
-	case modeDomains:
-		// read-only
 
 	case modeLogs:
 		maxScroll := max(len(m.logs)-(m.height-6), 0)

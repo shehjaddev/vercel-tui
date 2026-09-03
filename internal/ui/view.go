@@ -59,8 +59,6 @@ func (m Model) View() string {
 			b.WriteString(m.logsView())
 		case modeEnvs:
 			b.WriteString(m.envVarsView())
-		case modeDomains:
-			b.WriteString(m.domainsView())
 		}
 	}
 
@@ -450,26 +448,6 @@ func (m Model) envKeyLabel() string {
 	return "?"
 }
 
-func (m Model) domainsView() string {
-	scope := "team domains"
-	if m.projectID != "" {
-		scope = "domains of scoped project"
-	}
-	head := titleStyle.Render("domains — " + scope)
-	if len(m.domains) == 0 {
-		return head + "\n" + dimStyle.Render("no domains") + "\n"
-	}
-	rows := []string{headerStyle.Render(row(domWidths, "NAME", "VERIFIED", "CREATED"))}
-	for _, d := range m.domains {
-		verified := okStyle.Render("yes")
-		if !d.Verified {
-			verified = errStyle.Render("NO")
-		}
-		rows = append(rows, row(domWidths, trunc(d.Name, 40), verified, relAge(int64(d.CreatedAt))))
-	}
-	return head + "\n" + strings.Join(rows, "\n") + "\n"
-}
-
 func (m Model) loginView() string {
 	return strings.Join([]string{
 		titleStyle.Render("Login to Vercel"),
@@ -529,7 +507,7 @@ func (m Model) helpView() string {
 	return strings.Join([]string{
 		titleStyle.Render("Keys"),
 		"",
-		"1/2/3    deployments / projects / domains",
+		"1/2      deployments / projects",
 		"j k g G  navigate",
 		"enter    open actions for selected deployment",
 		"e        expand the selected project's deployments",
@@ -554,7 +532,6 @@ func (m Model) footer() string {
 		modeProjects:    "j/k move · enter scope · e env vars · L link to dir · U unlink · / filter · t team · ? help · q quit",
 		modeActions:     "j/k move · enter run · esc back · q quit",
 		modeEnvs:        "j/k move · n new · e edit value · d delete · esc back · q quit",
-		modeDomains:     "esc back · q quit",
 	}
 	modeLogsHints := "j/k scroll · / search · n next match · c copy url · esc back · q quit"
 	hint := hints[m.mode]
@@ -583,7 +560,6 @@ func (m Model) footer() string {
 }
 
 var envWidths = []int{1, 31, 29, 11, 12}
-var domWidths = []int{41, 9, 12}
 
 func row(widths []int, cells ...string) string {
 	var b strings.Builder
