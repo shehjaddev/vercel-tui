@@ -27,9 +27,9 @@ func main() {
 	link, _ := config.LoadProjectLink(*dir)
 
 	client := api.New(token)
-	if token == "" {
-		client.SetRefresh(config.RefreshVercelToken)
-	}
+	// always wire the refresh: it only fires on 403, and it reads the CLI's
+	// refresh token (absent for VERCEL_TOKEN/--token, where it's a no-op).
+	client.SetRefresh(config.RefreshVercelToken)
 	m := ui.New(client, token != "", *refresh, link, *target, *branch)
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
