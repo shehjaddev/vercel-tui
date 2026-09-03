@@ -26,6 +26,8 @@ type Deployment struct {
 	} `json:"creator"`
 	Meta  map[string]string `json:"meta"`
 	Alias []string          `json:"alias"`
+	// project is carried by the detail response; list items leave it empty.
+	Project Project `json:"project"`
 }
 
 // Key returns whichever deployment identifier the response carried.
@@ -58,6 +60,30 @@ func (d Deployment) ShortSHA() string {
 }
 
 func (d Deployment) Message() string { return d.Meta["githubCommitMessage"] }
+
+// Repo returns the linked git repository name (e.g. "shehjad-site"), across
+// the Git providers Vercel supports.
+func (d Deployment) Repo() string {
+	for _, k := range []string{"githubCommitRepo", "gitlabCommitRepo", "bitbucketCommitRepo"} {
+		if r := d.Meta[k]; r != "" {
+			return r
+		}
+	}
+	return ""
+}
+
+// LastActivityMs is the most recent status change (building, ready, or the
+// initial creation), used for the "last activity" column.
+func (d Deployment) LastActivityMs() int64 {
+	t := d.CreatedMs()
+	if d.BuildingAt > t {
+		t = d.BuildingAt
+	}
+	if r := d.ReadyMs(); r > t {
+		t = r
+	}
+	return t
+}
 
 func (d Deployment) CreatedMs() int64 {
 	if d.Created > 0 {

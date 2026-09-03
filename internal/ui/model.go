@@ -62,6 +62,7 @@ type Model struct {
 	projCursor   int
 	detail       *api.Deployment
 	detailCache  map[string]api.Deployment // enriched detail by deployment key
+	domainCache  map[string][]string       // project domains by project id
 	logs         []string
 	logScroll    int // lines back from the bottom; 0 means following
 
@@ -128,6 +129,10 @@ type actionMsg struct {
 }
 type envsMsg struct{ envs []api.EnvVar }
 type domainsMsg struct{ domains []api.Domain }
+type projDomainsMsg struct {
+	projectID string
+	domains   []api.Domain
+}
 type errMsg struct{ err error }
 
 type pendingAction int
@@ -259,6 +264,19 @@ func (m Model) fetchDetail(d api.Deployment) tea.Cmd {
 			return errMsg{err}
 		}
 		return detailsMsg{byKey: map[string]api.Deployment{key: *full}}
+	}
+}
+
+// fetchProjectDomains loads the domains bound to a project, for the top
+// detail block. Keyed by project id so each project is fetched once.
+func (m Model) fetchProjectDomains(projectID string) tea.Cmd {
+	c, team := m.client, m.teamID()
+	return func() tea.Msg {
+		domains, err := c.ProjectDomains(projectID, team)
+		if err != nil {
+			return projDomainsMsg{projectID: projectID, domains: nil}
+		}
+		return projDomainsMsg{projectID: projectID, domains: domains}
 	}
 }
 
@@ -654,6 +672,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		// fetch the selected project's domains once we have its id
+		if m.mode == modeDeployments && m.detail != nil && m.detail.Project.ID != "" {
+			if _, ok := m.domainCache[m.detail.Project.ID]; !ok {
+				return m, m.fetchProjectDomains(m.detail.Project.ID)
+			}
+		}
 		// chain to the next batch of uncached project heads
 		if m.mode == modeDeployments {
 			if cmd := m.fetchNextHeads(); cmd != nil {
@@ -677,6 +701,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.domains = msg.domains
 		m.loading, m.throttled = false, false
 		m.lastLoad = time.Now()
+
+	case projDomainsMsg:
+		if m.domainCache == nil {
+			m.domainCache = map[string][]string{}
+		}
+		names := make([]string, 0, len(msg.domains))
+		for _, d := range msg.domains {
+			names = append(names, d.Name)
+		}
+		m.domainCache[msg.projectID] = names
 
 	case logsMsg:
 		m.logs = msg.lines
@@ -901,16 +935,33 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// refreshDetail reads the cache (populated by the batch fetch) so
 		// navigation is instant with no per-row requests.
 		refreshDetail := func() tea.Cmd {
-			if d := m.selectedDep(); d != nil {
-				if m.detailCache != nil {
-					if cached, ok := m.detailCache[d.Key()]; ok {
-						m.detail = &cached // cache hit: instant, no request
-						return nil
-					}
-				}
-				return m.fetchDetail(*d) // one request; cached on arrival
+			d := m.selectedDep()
+			if d == nil {
+				return nil
 			}
-			return nil
+			if cached, ok := m.detailCache[d.Key()]; ok {
+				m.detail = &cached // cache hit: instant, no request
+			}
+			var cmds []tea.Cmd
+			if m.detail == nil {
+				cmds = append(cmds, m.fetchDetail(*d))
+			}
+			// domains for the selected project, fetched once per project
+			pid := ""
+			if m.detail != nil {
+				pid = m.detail.Project.ID
+			} else if cached, ok := m.detailCache[d.Key()]; ok {
+				pid = cached.Project.ID
+			}
+			if pid != "" {
+				if _, ok := m.domainCache[pid]; !ok {
+					cmds = append(cmds, m.fetchProjectDomains(pid))
+				}
+			}
+			if len(cmds) == 0 {
+				return nil
+			}
+			return tea.Batch(cmds...)
 		}
 		switch key {
 		case "j", "down":

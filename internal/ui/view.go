@@ -112,7 +112,7 @@ func (m Model) deploymentsView() string {
 	// --- list ---
 	widths := m.boardWidths()
 	var body []string
-	body = append(body, headerStyle.Render(row(widths, "", "PROJECT", "STATE", "BRANCH", "COMMIT", "AGE")))
+	body = append(body, headerStyle.Render(row(widths, "", "PROJECT", "STATE", "BRANCH", "COMMIT", "AGE", "ACTIVITY")))
 	maxRows := max(m.height-9, 1)
 	start := clamp(m.depCursor-maxRows+2, 0, max(len(rows)-maxRows, 0))
 	for i := start; i < min(start+maxRows, len(rows)); i++ {
@@ -158,13 +158,16 @@ func (m Model) topDetail() string {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Render(s)
 	}
 
-	// line 1: project · state · branch · commit · target
+	// line 1: project · state · branch · commit · target · repo
 	line1 := []string{
 		titleStyle.Render(d.Name),
 		stateStyle[d.Status()].Render(strings.ToUpper(d.Status())),
 		val(d.Branch()),
 		val(d.ShortSHA()),
 		val(targetLabel(d.Target)),
+	}
+	if r := d.Repo(); r != "" {
+		line1 = append(line1, val(r))
 	}
 
 	// line 2: commit message (single line, collapse embedded newlines)
@@ -190,13 +193,21 @@ func (m Model) topDetail() string {
 		line4 = dimStyle.Render("url") + " " + val(trunc("https://"+d.URL, max(m.width-8, 30))) + "\n"
 	}
 
-	// line 5: aliases (if any)
+	// line 5: domains bound to this project (fetched on selection)
 	line5 := ""
-	if len(d.Alias) > 0 {
-		line5 = dimStyle.Render("aliases") + " " + val(trunc(strings.Join(d.Alias, ", "), max(m.width-8, 30)))
+	if d.Project.ID != "" {
+		if names, ok := m.domainCache[d.Project.ID]; ok && len(names) > 0 {
+			line5 = dimStyle.Render("domains") + " " + val(trunc(strings.Join(names, ", "), max(m.width-8, 30))) + "\n"
+		}
 	}
 
-	return strings.Join(line1, "  ") + "\n" + line2 + line3 + "\n" + line4 + line5
+	// line 6: aliases (if any)
+	line6 := ""
+	if len(d.Alias) > 0 {
+		line6 = dimStyle.Render("aliases") + " " + val(trunc(strings.Join(d.Alias, ", "), max(m.width-8, 30)))
+	}
+
+	return strings.Join(line1, "  ") + "\n" + line2 + line3 + "\n" + line4 + line5 + line6
 }
 
 // topDetailSeparator renders the gap + divider between the detail block
@@ -218,7 +229,7 @@ func (m Model) groupByName(name string) projectGroup {
 // boardWidths sizes the board columns; content-driven, modest, so the
 // overview reads tight rather than spread out and cluttered.
 func (m Model) boardWidths() []int {
-	return []int{1, 20, 10, 22, 9, 10}
+	return []int{1, 20, 10, 22, 9, 10, 11}
 }
 
 func (m Model) boardHeadCells(project string, latest *api.Deployment, widths []int, expanded, selected bool) []string {
@@ -245,6 +256,7 @@ func (m Model) boardHeadCells(project string, latest *api.Deployment, widths []i
 		trunc(branch, widths[3]),
 		trunc(sha, widths[4]),
 		age,
+		relAge(latest.LastActivityMs()),
 	}
 }
 
@@ -265,6 +277,7 @@ func (m Model) boardChildCells(d api.Deployment, widths []int, selected bool) []
 		trunc(d.Branch(), widths[3]),
 		trunc(d.ShortSHA(), widths[4]),
 		relAge(d.CreatedMs()),
+		relAge(d.LastActivityMs()),
 	}
 }
 
