@@ -45,15 +45,17 @@ CLI OAuth tokens expire roughly every few hours; `vtui` refreshes them
 transparently on the first rejected request, so the tool keeps working
 without restarting the official CLI.
 
-If you work inside a linked directory, `vtui` also reads
-`.vercel/project.json` (the same file the official CLI writes) to launch
-scoped to that project and team. `--dir` overrides the search path.
+If you work inside a linked directory, `vtui` reads `.vercel/project.json`
+(the same file the official CLI writes) on launch to scope the view to that
+project and team. `L` writes that file for the selected project, and
+`--dir` overrides where it is read from / written to.
 
 ## Usage
 
-`1` / `2` / `3` switch between deployments, projects, and domains.
-`t` switches the active team and re-scopes every view. Every list
-auto-refreshes (5s by default, 2s while a build is running).
+`vtui` opens directly into the deployments view — one list of every
+deployment across the active team, grouped by project. `t` switches the
+active team and re-scopes the view. Every list auto-refreshes (5s by
+default, 2s while a build is running).
 
 ### Deployments
 
@@ -61,7 +63,8 @@ auto-refreshes (5s by default, 2s while a build is running).
 |---|---|
 | `j` `k` `g` `G` | move cursor / jump to first / last |
 | `enter` | open the actions menu (logs, redeploy, rollback, copy, open, delete) |
-| `e` | expand / collapse the selected project's deployments |
+| `e` | environment variables for the selected project |
+| `E` | expand / collapse the selected project's deployments |
 | `a` | toggle grouped-by-project vs all deployments |
 | `l` | live logs of the selected deployment (scroll, `/` search, `n` next match) |
 | `/` | filter list by project, branch, commit, author, url |
@@ -72,30 +75,28 @@ auto-refreshes (5s by default, 2s while a build is running).
 | `D` | delete a deployment (type the project name to confirm) |
 | `c` | copy the deployment URL |
 | `o` | open the deployment in your browser |
+| `L` | link the selected project to `./.vercel/project.json` (persists scope) |
+| `U` | unlink: drop `.vercel/project.json` and clear the project filter |
+| `?` | toggle this help |
 
-The selected deployment's details — project, state, branch, commit,
-target, commit message, author, timestamps, URL, and aliases — show in
-the pinned block above the list.
+The selected deployment's details show in a pinned block above the list:
+project, state, branch, commit, target, repo (`owner/repo`), commit
+message, author, timestamps, URL, and the project's domains. The list
+columns are PROJECT, STATE, BRANCH, COMMIT, AGE, and ACTIVITY (last
+status change).
 
-### Projects
+### Project scoping
 
-| Key | Action |
-|---|---|
-| `enter` | filter the deployments view to this project |
-| `e` | environment variables for this project |
-| `L` | link this project to `./.vercel/project.json` |
+By default the list shows every project in the active team. Press `L` on a
+project to write `.vercel/project.json` (scoping every future launch to
+that project), and `U` to clear it. This is the only way to narrow the
+view to a single project.
 
-(Note: in the Projects view `e` opens environment variables; in the
-Deployments view `e` expands a project.)
+### Environment variables
 
-Environment variables support create, edit value, change targets, and
-delete. Sensitive variables are write-only through the API; the UI says
-so instead of pretending to read them.
-
-### Domains
-
-Lists project domains (when a project is scoped) and team domains,
-showing verification status.
+`e` opens the selected project's environment variables: create, edit
+value, change targets, and delete. Sensitive variables are write-only
+through the API; the UI says so instead of pretending to read them.
 
 ## Flags
 
