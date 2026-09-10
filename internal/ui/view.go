@@ -107,6 +107,10 @@ func (m Model) deploymentsView() string {
 
 	// --- list ---
 	widths := m.boardWidths()
+	byName := make(map[string]projectGroup)
+	for _, g := range m.projectGroups() {
+		byName[g.name] = g
+	}
 	var body []string
 	body = append(body, headerStyle.Render(row(widths, "", "PROJECT", "STATE", "BRANCH", "COMMIT", "AGE", "ACTIVITY")))
 	maxRows := max(m.height-9, 1)
@@ -116,9 +120,8 @@ func (m Model) deploymentsView() string {
 		sel := i == m.depCursor
 		var cells []string
 		if r.project != "" {
-			g := m.groupByName(r.project)
 			var latest *api.Deployment
-			if len(g.deployments) > 0 {
+			if g, ok := byName[r.project]; ok && len(g.deployments) > 0 {
 				latest = &g.deployments[0]
 			}
 			cells = m.boardHeadCells(r.project, latest, widths, m.expanded == r.project, sel)
@@ -204,16 +207,6 @@ func (m Model) topDetail() string {
 // and the list, so the two read as separate regions.
 func (m Model) topDetailSeparator() string {
 	return "\n" + dimStyle.Render(strings.Repeat("─", min(m.width-2, 60))) + "\n"
-}
-
-// projectChip renders one project's recent deploy-state distribution.
-func (m Model) groupByName(name string) projectGroup {
-	for _, g := range m.projectGroups() {
-		if g.name == name {
-			return g
-		}
-	}
-	return projectGroup{name: name}
 }
 
 // boardWidths sizes the board columns; content-driven, modest, so the
