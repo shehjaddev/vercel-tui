@@ -221,8 +221,11 @@ func (m *Model) fetchDeps() tea.Cmd {
 func (m Model) unlinkCmd() (Model, tea.Cmd) {
 	// drop the persisted .vercel/project.json (written by L) and clear any
 	// in-memory project filter so the deployments view shows every project.
-	_ = os.Remove(filepath.Join(m.dir, ".vercel", "project.json"))
-	m.projectID = ""
+	if err := os.Remove(filepath.Join(m.dir, ".vercel", "project.json")); err != nil && !os.IsNotExist(err) {
+		m.projectID, m.orgID = "", ""
+		return m, func() tea.Msg { return errMsg{err} }
+	}
+	m.projectID, m.orgID = "", ""
 	cmd := m.fetchDeps()
 	return m, cmd
 }
@@ -408,7 +411,9 @@ func openBrowser(target string) tea.Cmd {
 	return func() tea.Msg {
 		var candidates [][]string
 		if bin := os.Getenv("BROWSER"); bin != "" {
-			candidates = append(candidates, []string{bin})
+			if fields := strings.Fields(bin); len(fields) > 0 {
+				candidates = append(candidates, fields)
+			}
 		}
 		switch runtime.GOOS {
 		case "darwin":
