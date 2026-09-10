@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,8 +13,7 @@ func TestEnvCRUD(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method, path = r.Method, r.URL.Path
 		if r.Body != nil {
-			buf := make([]byte, r.ContentLength)
-			r.Body.Read(buf)
+			buf, _ := io.ReadAll(r.Body)
 			body = string(buf)
 		}
 		json.NewEncoder(w).Encode(map[string]any{"envs": []map[string]any{{

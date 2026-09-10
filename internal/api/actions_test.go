@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,8 +17,7 @@ func TestRequestMethodsAndBody(t *testing.T) {
 		gotAuth = r.Header.Get("Authorization")
 		if r.Method == "POST" {
 			gotCT = r.Header.Get("Content-Type")
-			buf := make([]byte, r.ContentLength)
-			r.Body.Read(buf)
+			buf, _ := io.ReadAll(r.Body)
 			gotBody = string(buf)
 		}
 		json.NewEncoder(w).Encode(map[string]any{"uid": "dpl_new"})
@@ -98,8 +98,7 @@ func TestCancelSendsJSONBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotCT = r.Header.Get("Content-Type")
-		buf := make([]byte, r.ContentLength)
-		r.Body.Read(buf)
+		buf, _ := io.ReadAll(r.Body)
 		gotBody = string(buf)
 		w.WriteHeader(200)
 		json.NewEncoder(w).Encode(map[string]any{"state": "CANCELED"})
