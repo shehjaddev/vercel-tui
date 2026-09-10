@@ -3,9 +3,12 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"time"
 )
 
 // VERCEL_CLI_CLIENT_ID is the public OAuth client id the Vercel CLI uses;
@@ -81,21 +84,29 @@ func RefreshVercelToken() (string, error) {
 		"refresh_token": {refresh},
 		"client_id":     {VERCEL_CLI_CLIENT_ID},
 	}
-	resp, err := http.PostForm(tokenEndpoint, form)
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).PostForm(tokenEndpoint, form)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
 	var out struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
 		Error        string `json:"error"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", fmt.Errorf("token refresh failed (status %d): %v", resp.StatusCode, err)
 	}
 	if out.AccessToken == "" {
-		return "", errors.New("token refresh failed: " + out.Error)
+		msg := out.Error
+		if msg == "" {
+			msg = string(body)
+		}
+		return "", fmt.Errorf("token refresh failed (status %d): %s", resp.StatusCode, msg)
 	}
 	if err := SaveCLIAuth(out.AccessToken, out.RefreshToken); err != nil {
 		// the new token is still usable this session even if persisting fails
