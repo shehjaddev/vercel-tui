@@ -11,6 +11,21 @@ import (
 	"github.com/shehjaddev/vercel-tui/internal/api"
 )
 
+func TestRedeployTargetNormalization(t *testing.T) {
+	for target, want := range map[string]string{
+		"production":  "production",
+		"preview":     "preview",
+		"development": "development",
+		"PRODUCTION":  "production",
+		"":            "",
+		"staging":     "",
+	} {
+		if got := redeployTarget(api.Deployment{Target: target}); got != want {
+			t.Errorf("redeployTarget(%q) = %q, want %q", target, got, want)
+		}
+	}
+}
+
 // Regression for BUG-1: typed-confirm dialogs must collect keystrokes.
 func TestConfirmDialogCollectsTyping(t *testing.T) {
 	m := New(api.New("tok"), true, 0, nil, "", "", ".")

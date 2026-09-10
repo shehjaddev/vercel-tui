@@ -492,6 +492,16 @@ func (m Model) runEnvDelete() tea.Cmd {
 	}
 }
 
+// redeployTarget keeps production redeploys in production (the API
+// defaults to preview) while only sending documented target values.
+func redeployTarget(dep api.Deployment) string {
+	switch strings.ToLower(dep.Target) {
+	case "production", "preview", "development":
+		return strings.ToLower(dep.Target)
+	}
+	return ""
+}
+
 func (m Model) runAction(pa pendingAction, dep api.Deployment) tea.Cmd {
 	c, team := m.client, m.teamID()
 	id := dep.Key()
@@ -508,7 +518,7 @@ func (m Model) runAction(pa pendingAction, dep api.Deployment) tea.Cmd {
 		}
 	case pendRedeploy:
 		name := dep.Name
-		target := dep.Target // keep production redeploys in production
+		target := redeployTarget(dep)
 		return func() tea.Msg {
 			var git *api.GitSource
 			if ref := dep.Branch(); ref != "" {
