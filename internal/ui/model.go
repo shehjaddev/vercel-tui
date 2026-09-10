@@ -234,10 +234,7 @@ func (m Model) unlinkCmd() (Model, tea.Cmd) {
 }
 
 func (m Model) fetchDetail(d api.Deployment) tea.Cmd {
-	c, id, team := m.client, d.UID, m.teamID()
-	if d.UID == "" {
-		id = d.ID
-	}
+	c, id, team := m.client, d.Key(), m.teamID()
 	key := d.Key()
 	return func() tea.Msg {
 		full, err := c.Deployment(id, team)
@@ -343,7 +340,7 @@ func (m Model) fetchLogs() tea.Cmd {
 	c, team := m.client, m.teamID()
 	id := ""
 	if m.detail != nil {
-		id = m.detail.UID
+		id = m.detail.Key()
 	}
 	return func() tea.Msg {
 		events, err := c.Events(id, team)
@@ -486,7 +483,7 @@ func (m Model) runEnvDelete() tea.Cmd {
 
 func (m Model) runAction(pa pendingAction, dep api.Deployment) tea.Cmd {
 	c, team := m.client, m.teamID()
-	id := dep.UID
+	id := dep.Key()
 	switch pa {
 	case pendCancel:
 		return func() tea.Msg {
