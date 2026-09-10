@@ -758,14 +758,22 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.mode == modeLogin {
 		switch key {
-		case "q", "ctrl+c":
+		case "ctrl+c", "esc":
 			return m, tea.Quit
 		case "enter":
 			if m.tokenBuf != "" {
 				return m, validateToken(m.tokenBuf)
 			}
 		case "o":
-			return m, openBrowser("https://vercel.com/account/tokens")
+			if m.tokenBuf == "" {
+				return m, openBrowser("https://vercel.com/account/tokens")
+			}
+			m.tokenBuf += key
+		case "q":
+			if m.tokenBuf == "" {
+				return m, tea.Quit
+			}
+			m.tokenBuf += key
 		case "backspace":
 			if r := []rune(m.tokenBuf); len(r) > 0 {
 				m.tokenBuf = string(r[:len(r)-1])
