@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -405,14 +406,26 @@ func validateToken(token string) tea.Cmd {
 	}
 }
 
-func openBrowser(url string) tea.Cmd {
+func openBrowser(target string) tea.Cmd {
 	return func() tea.Msg {
-		bin := os.Getenv("BROWSER")
-		if bin == "" {
-			bin = "xdg-open"
+		var candidates [][]string
+		if bin := os.Getenv("BROWSER"); bin != "" {
+			candidates = append(candidates, []string{bin})
 		}
-		exec.Command(bin, url).Start()
-		return nil
+		switch runtime.GOOS {
+		case "darwin":
+			candidates = append(candidates, []string{"open"})
+		case "windows":
+			candidates = append(candidates, []string{"rundll32", "url.dll,FileProtocolHandler"})
+		default:
+			candidates = append(candidates, []string{"xdg-open"})
+		}
+		for _, c := range candidates {
+			if err := exec.Command(c[0], append(c[1:], target)...).Start(); err == nil {
+				return nil
+			}
+		}
+		return errMsg{errors.New("could not open browser")}
 	}
 }
 
