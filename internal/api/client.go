@@ -73,16 +73,13 @@ func (c *Client) request(method, path string, query url.Values, body any, out an
 }
 
 // do performs a request with 429 backoff and returns the raw response
-// body. Non-2xx responses become errors.
+// body. Non-2xx responses become errors. A stale OAuth token is refreshed
+// at most once per call.
 func (c *Client) do(method, fullURL string, payload []byte) ([]byte, error) {
 	refreshed := false
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Duration(1<<uint(attempt-1)) * time.Second)
-		}
-		if refreshed {
-			attempt = -1 // restart the loop without burning 429 backoff
-			refreshed = false
 		}
 		req, err := http.NewRequest(method, fullURL, bytes.NewReader(payload))
 		if err != nil {
@@ -106,10 +103,11 @@ func (c *Client) do(method, fullURL string, payload []byte) ([]byte, error) {
 			continue
 		}
 		if resp.StatusCode >= 400 {
-			if resp.StatusCode == http.StatusForbidden && c.refresh != nil && !refreshed {
+			if resp.StatusCode == http.StatusForbidden && !refreshed && c.refresh != nil {
 				if tok, rerr := c.refresh(); rerr == nil {
 					c.token = tok
 					refreshed = true
+					attempt-- // retry the same slot without burning 429 backoff
 					continue
 				}
 			}
