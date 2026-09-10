@@ -263,9 +263,9 @@ func (m Model) fetchProjectDomains(projectID string) tea.Cmd {
 
 // fetchNextDomains prefetches project domains in lockstep with the alias
 // prefetch: for each project head whose enriched detail we already hold, it
-// fetches up to 3 uncached project domains per batch (with a pause between
-// each, staying under the rate limit) and chains to the next batch. Every
-// project is fetched once and cached, so navigation never re-requests.
+// fetches up to 3 uncached project domains per batch and chains to the next
+// batch (the chain delay between batches keeps us under the rate limit).
+// Every project is fetched once and cached, so navigation never re-requests.
 func (m Model) fetchNextDomains() tea.Cmd {
 	c, team := m.client, m.teamID()
 	var pids []string
@@ -290,23 +290,20 @@ func (m Model) fetchNextDomains() tea.Cmd {
 	}
 	return func() tea.Msg {
 		domains := map[string][]string{}
-		for i, pid := range pids {
+		for _, pid := range pids {
 			if ds, err := c.ProjectDomains(pid, team); err == nil {
 				for _, d := range ds {
 					domains[pid] = append(domains[pid], d.Name)
 				}
-			}
-			if i < len(pids)-1 {
-				time.Sleep(1200 * time.Millisecond)
 			}
 		}
 		return projDomainsMsg{domains: domains}
 	}
 }
 
-// time (with a pause between each, staying under the rate limit), returning
-// them in one message so aliases appear after each batch rather than at the
-// very end. Chains to the next 3 on arrival.
+// fetchNextHeads enriches up to 3 uncached project heads per batch,
+// returning them in one message so aliases appear after each batch rather
+// than at the very end. Chains to the next 3 on arrival.
 func (m Model) fetchNextHeads() tea.Cmd {
 	c, team := m.client, m.teamID()
 	var heads []api.Deployment
