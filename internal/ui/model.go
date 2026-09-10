@@ -450,8 +450,8 @@ func copyURL(url string) tea.Cmd {
 }
 
 // handleConfirm runs the typed-confirmation dialog for destructive actions.
-func (m Model) handleConfirm(key string) (tea.Model, tea.Cmd) {
-	switch key {
+func (m Model) handleConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
 	case "esc":
 		m.pending = pendNone
 		m.confirmInput = ""
@@ -477,8 +477,8 @@ func (m Model) handleConfirm(key string) (tea.Model, tea.Cmd) {
 		}
 		return m, m.runAction(pa, m.pendingDep)
 	default:
-		if len(key) == 1 {
-			m.confirmInput += key
+		if msg.Type == tea.KeyRunes {
+			m.confirmInput += string(msg.Runes)
 		}
 	}
 	return m, nil
@@ -803,8 +803,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.tokenBuf = string(r[:len(r)-1])
 			}
 		default:
-			if len(key) == 1 {
-				m.tokenBuf += key
+			if msg.Type == tea.KeyRunes {
+				m.tokenBuf += string(msg.Runes)
 			}
 		}
 		return m, nil
@@ -821,15 +821,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.filterBuf = string(r[:len(r)-1])
 			}
 		default:
-			if len(key) == 1 {
-				m.filterBuf += key
+			if msg.Type == tea.KeyRunes {
+				m.filterBuf += string(msg.Runes)
 			}
 		}
 		return m, nil
 	}
 
 	if m.pending != pendNone {
-		return m.handleConfirm(key)
+		return m.handleConfirm(msg)
 	}
 
 	if m.envForm {
@@ -860,11 +860,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				*buf = string(r[:len(r)-1])
 			}
 		default:
-			if len(key) == 1 {
+			if msg.Type == tea.KeyRunes {
 				if m.envField == 0 && m.envEditID == "" {
-					m.envKey += key
+					m.envKey += string(msg.Runes)
 				} else {
-					m.envValue += key
+					m.envValue += string(msg.Runes)
 				}
 			}
 		}
@@ -884,8 +884,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.searchBuf = string(r[:len(r)-1])
 			}
 		default:
-			if len(key) == 1 {
-				m.searchBuf += key
+			if msg.Type == tea.KeyRunes {
+				m.searchBuf += string(msg.Runes)
 			}
 		}
 		return m, nil
