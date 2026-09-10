@@ -376,6 +376,10 @@ func (m Model) envKeyLabel() string {
 }
 
 func (m Model) loginView() string {
+	status := "token: " + m.tokenBuf
+	if m.loading {
+		status = dimStyle.Render("validating token…")
+	}
 	return strings.Join([]string{
 		titleStyle.Render("Login to Vercel"),
 		"",
@@ -383,7 +387,7 @@ func (m Model) loginView() string {
 		"create a token, then paste it below and press enter.",
 		"It will be stored under ~/.config/vtui/token.",
 		"",
-		"token: " + m.tokenBuf,
+		status,
 	}, "\n") + "\n"
 }
 

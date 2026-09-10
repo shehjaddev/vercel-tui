@@ -805,6 +805,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tokenOkMsg:
 		m.client = api.New(msg.token)
 		m.authed = true
+		m.loading = false
 		m.user = msg.user
 		m.teams = []api.Team{{Name: msg.user + " (personal)"}}
 		m.mode = modeDeployments
@@ -861,6 +862,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "enter":
 			if m.tokenBuf != "" {
+				m.loading = true
 				return m, validateToken(m.tokenBuf)
 			}
 		case "o":
