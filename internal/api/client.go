@@ -81,7 +81,11 @@ func (c *Client) do(method, fullURL string, payload []byte) ([]byte, error) {
 		if attempt > 0 {
 			time.Sleep(time.Duration(1<<uint(attempt-1)) * time.Second)
 		}
-		req, err := http.NewRequest(method, fullURL, bytes.NewReader(payload))
+		var reader io.Reader
+		if payload != nil {
+			reader = bytes.NewReader(payload)
+		}
+		req, err := http.NewRequest(method, fullURL, reader)
 		if err != nil {
 			return nil, err
 		}
@@ -97,8 +101,11 @@ func (c *Client) do(method, fullURL string, payload []byte) ([]byte, error) {
 		if method != http.MethodGet {
 			limit = 1 << 20
 		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, limit))
+		body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
 		if resp.StatusCode == http.StatusTooManyRequests {
 			continue
 		}
@@ -118,7 +125,7 @@ func (c *Client) do(method, fullURL string, payload []byte) ([]byte, error) {
 	return nil, ErrThrottled
 }
 
-func apiError(method, url string, status int, body []byte) error {
+func apiError(method, rawURL string, status int, body []byte) error {
 	var e struct {
 		Error struct {
 			Message string `json:"message"`
@@ -128,7 +135,7 @@ func apiError(method, url string, status int, body []byte) error {
 	if json.Unmarshal(body, &e) == nil && e.Error.Message != "" {
 		msg = e.Error.Message
 	}
-	return fmt.Errorf("%s %s: %d %s", method, urlPath(url), status, msg)
+	return fmt.Errorf("%s %s: %d %s", method, urlPath(rawURL), status, msg)
 }
 
 // urlPath strips scheme and host so error messages read like "GET /v6/...".
