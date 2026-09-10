@@ -655,6 +655,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.user = msg.user
 		m.teams = append([]api.Team{{Name: m.user + " (personal)"}}, msg.teams...)
 		m.err = ""
+		if m.orgID != "" {
+			for i := range m.teams {
+				if m.teams[i].ID == m.orgID {
+					m.teamIdx, m.teamCursor = i, i
+					break
+				}
+			}
+		}
 		cmd := m.loadCurrent()
 		return m, cmd
 
@@ -916,6 +924,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.teamIdx = m.teamCursor
 				m.depCursor = 0
 				m.teamSel = false
+				if m.projectID != "" && m.teamID() != m.orgID {
+					m.projectID = ""
+					m.orgID = ""
+				}
 				teamCmd := m.loadCurrent()
 				return m, teamCmd
 			}
