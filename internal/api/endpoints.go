@@ -9,21 +9,47 @@ import (
 	"strconv"
 )
 
+// maxDeploymentPages bounds list fetching: 5 pages of 100 keeps the
+// overview complete for large teams without hammering the rate limit.
+const maxDeploymentPages = 5
+
 func (c *Client) Deployments(projectID, teamID, target string, limit int) ([]Deployment, error) {
-	q := url.Values{"limit": {strconv.Itoa(limit)}}
-	if projectID != "" {
-		q.Set("projectId", projectID)
+	if limit <= 0 || limit > 100 {
+		limit = 100
 	}
-	if target != "" {
-		q.Set("target", target)
+	var all []Deployment
+	until := ""
+	for page := 0; page < maxDeploymentPages; page++ {
+		q := url.Values{"limit": {strconv.Itoa(limit)}}
+		if projectID != "" {
+			q.Set("projectId", projectID)
+		}
+		if target != "" {
+			q.Set("target", target)
+		}
+		if until != "" {
+			q.Set("until", until)
+		}
+		var out struct {
+			Deployments []Deployment `json:"deployments"`
+			Pagination  struct {
+				Next msTime `json:"next"`
+			} `json:"pagination"`
+		}
+		if err := c.get("/v6/deployments", scoped(q, teamID), &out); err != nil {
+			return nil, err
+		}
+		if len(out.Deployments) == 0 {
+			break
+		}
+		all = append(all, out.Deployments...)
+		next := strconv.FormatInt(int64(out.Pagination.Next), 10)
+		if out.Pagination.Next == 0 || next == until {
+			break
+		}
+		until = next
 	}
-	var out struct {
-		Deployments []Deployment `json:"deployments"`
-	}
-	if err := c.get("/v6/deployments", scoped(q, teamID), &out); err != nil {
-		return nil, err
-	}
-	return out.Deployments, nil
+	return all, nil
 }
 
 func (c *Client) Deployment(id, teamID string) (*Deployment, error) {

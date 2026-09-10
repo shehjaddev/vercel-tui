@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -45,6 +47,37 @@ func TestDecodeNonStringMeta(t *testing.T) {
 	}
 	if d[0].Meta["builds"] != "3" || d[0].Meta["flag"] != "true" {
 		t.Errorf("non-string meta not coerced: %+v", d[0].Meta)
+	}
+}
+
+func TestDeploymentsPaginates(t *testing.T) {
+	var untils []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		untils = append(untils, r.URL.Query().Get("until"))
+		if r.URL.Query().Get("until") == "" {
+			json.NewEncoder(w).Encode(map[string]any{
+				"deployments": []map[string]any{{"uid": "dpl_1", "name": "web"}},
+				"pagination":  map[string]any{"next": 1700000000000},
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"deployments": []map[string]any{{"uid": "dpl_2", "name": "web"}},
+		})
+	}))
+	defer srv.Close()
+
+	c := New("tok")
+	c.baseURL = srv.URL
+	deps, err := c.Deployments("", "", "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deps) != 2 || deps[0].UID != "dpl_1" || deps[1].UID != "dpl_2" {
+		t.Fatalf("paged deps = %+v", deps)
+	}
+	if len(untils) != 2 || untils[0] != "" || untils[1] != "1700000000000" {
+		t.Fatalf("until cursors = %q", untils)
 	}
 }
 
