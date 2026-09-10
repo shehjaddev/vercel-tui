@@ -272,26 +272,6 @@ func (m Model) boardChildCells(d api.Deployment, widths []int, selected bool) []
 	}
 }
 
-// depWidths returns column widths, distributing spare horizontal space into
-// the flexible PROJECT and BRANCH columns so the table fills the terminal.
-func (m Model) depWidths() []int {
-	base := []int{1, 19, 11, 10, 25, 9, 11, 10, 8}
-	if m.width <= 0 {
-		return base
-	}
-	total := 0
-	for _, w := range base {
-		total += w
-	}
-	if spare := m.width - total - 1; spare > 0 {
-		// widen only the PROJECT column (names genuinely vary); leave the
-		// rest content-sized so short values like branch names don't create
-		// a huge internal void.
-		base[1] += spare
-	}
-	return base
-}
-
 func (m Model) actionsView() string {
 	d := m.detail
 	if d == nil {
@@ -580,6 +560,9 @@ func relAge(ms int64) string {
 }
 
 func rel(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
 	switch {
 	case d < time.Minute:
 		return fmt.Sprintf("%ds ago", int(d.Seconds()))

@@ -192,9 +192,6 @@ func (m Model) teamID() string {
 	if m.teamIdx > 0 && m.teamIdx < len(m.teams) {
 		return m.teams[m.teamIdx].ID
 	}
-	if m.orgID != "" && m.teamIdx == 0 {
-		return ""
-	}
 	return ""
 }
 
@@ -221,11 +218,6 @@ func (m Model) fetchDeps() tea.Cmd {
 	}
 }
 
-// fetchAllDetails enriches every deployment in the list at once, so aliases
-// fetchDetail fetches one deployment's full detail (aliases) and caches it
-// keyed by id. It's fired only for the selected row — one request at a time,
-// which is all Vercel's rate limit reliably allows. Cached so returning to a
-// row is instant.
 func (m Model) unlinkCmd() (Model, tea.Cmd) {
 	// drop the persisted .vercel/project.json (written by L) and clear any
 	// in-memory project filter so the deployments view shows every project.
@@ -234,6 +226,10 @@ func (m Model) unlinkCmd() (Model, tea.Cmd) {
 	return m, m.fetchDeps()
 }
 
+// fetchDetail fetches one deployment's full detail (aliases) and caches it
+// keyed by id. It's fired only for the selected row — one request at a time,
+// which is all Vercel's rate limit reliably allows. Cached so returning to a
+// row is instant.
 func (m Model) fetchDetail(d api.Deployment) tea.Cmd {
 	c, id, team := m.client, d.Key(), m.teamID()
 	key := d.Key()
@@ -1094,7 +1090,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		actions := m.deploymentActions()
 		switch key {
-		case "esc", "q":
+		case "esc":
 			m.mode = modeDeployments
 		case "j", "down":
 			m.actionCursor = clamp(m.actionCursor+1, 0, len(actions)-1)
@@ -1294,8 +1290,8 @@ func (m Model) projectGroups() []projectGroup {
 	return groups
 }
 
-// selectedDep returns the deployment at the cursor, or nil if the cursor
-// is on a project head row.
+// selectedDep returns the deployment at the cursor. Project head rows
+// carry their latest deployment, so this is nil only off-list.
 func (m Model) selectedDep() *api.Deployment {
 	rows := m.displayRows()
 	if m.depCursor < 0 || m.depCursor >= len(rows) {
