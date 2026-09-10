@@ -655,12 +655,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.depCursor = clamp(m.depCursor, 0, max(len(m.displayRows())-1, 0))
 		// Fetch the selected row's detail immediately (1 fast request, always
 		// reliable) so its aliases show right away, then stage the rest.
-		if m.mode == modeDeployments && m.detailCache == nil {
-			m.detailCache = map[string]api.Deployment{}
-			if d := m.selectedDep(); d != nil {
-				return m, tea.Batch(m.fetchDetail(*d), m.fetchNextHeads())
+		// Runs on every refresh so newly arrived deployments get enriched.
+		if m.mode == modeDeployments {
+			if m.detailCache == nil {
+				m.detailCache = map[string]api.Deployment{}
 			}
-			return m, m.fetchNextHeads()
+			var cmds []tea.Cmd
+			if d := m.selectedDep(); d != nil {
+				if _, ok := m.detailCache[d.Key()]; !ok {
+					cmds = append(cmds, m.fetchDetail(*d))
+				}
+			}
+			if h := m.fetchNextHeads(); h != nil {
+				cmds = append(cmds, h)
+			}
+			if len(cmds) > 0 {
+				return m, tea.Batch(cmds...)
+			}
 		}
 
 	case detailsMsg:
@@ -938,11 +949,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if d == nil {
 				return nil
 			}
-			if cached, ok := m.detailCache[d.Key()]; ok {
-				m.detail = &cached // cache hit: instant, no request
+			_, cached := m.detailCache[d.Key()]
+			if cached {
+				c := m.detailCache[d.Key()]
+				m.detail = &c // cache hit: instant, no request
 			}
 			var cmds []tea.Cmd
-			if m.detail == nil {
+			if !cached {
 				cmds = append(cmds, m.fetchDetail(*d))
 			}
 			// domains for the selected project, fetched once per project
