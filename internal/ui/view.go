@@ -73,7 +73,7 @@ func (m Model) statusBar() string {
 	if m.filter != "" {
 		parts = append(parts, "filter: "+m.filter)
 	}
-	if m.mode == modeDeployments && stateFilters[m.stateIdx] != "" {
+	if m.mode == modeDeployments && m.stateIdx >= 0 && m.stateIdx < len(stateFilters) && stateFilters[m.stateIdx] != "" {
 		parts = append(parts, "state: "+stateFilters[m.stateIdx])
 	}
 	if m.branchFlag != "" {
@@ -227,7 +227,7 @@ func (m Model) boardHeadCells(project string, latest *api.Deployment, widths []i
 	if selected {
 		mark = "❯"
 	}
-	state, branch, sha, age := "", "", "", ""
+	state, branch, sha, age, activity := "", "", "", "", ""
 	if latest != nil {
 		st := latest.Status()
 		if selected {
@@ -238,6 +238,7 @@ func (m Model) boardHeadCells(project string, latest *api.Deployment, widths []i
 		branch = latest.Branch()
 		sha = latest.ShortSHA()
 		age = relAge(latest.CreatedMs())
+		activity = relAge(latest.LastActivityMs())
 	}
 	return []string{
 		mark,
@@ -246,7 +247,7 @@ func (m Model) boardHeadCells(project string, latest *api.Deployment, widths []i
 		trunc(branch, widths[3]),
 		trunc(sha, widths[4]),
 		age,
-		relAge(latest.LastActivityMs()),
+		activity,
 	}
 }
 
@@ -312,6 +313,9 @@ func (m Model) actionsView() string {
 }
 
 func (m Model) logsView() string {
+	if m.detail == nil {
+		return dimStyle.Render("waiting for events…") + "\n"
+	}
 	head := titleStyle.Render("logs — "+m.detail.Name) + dimStyle.Render("  ("+m.detail.ShortSHA()+")")
 	if len(m.logs) == 0 {
 		return head + "\n" + dimStyle.Render("waiting for events…") + "\n"

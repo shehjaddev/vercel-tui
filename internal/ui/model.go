@@ -201,6 +201,9 @@ func (m Model) teamName() string {
 	if len(m.teams) == 0 {
 		return "…"
 	}
+	if m.teamIdx < 0 || m.teamIdx >= len(m.teams) {
+		return m.teams[0].Name
+	}
 	return m.teams[m.teamIdx].Name
 }
 
@@ -1176,7 +1179,10 @@ func (m *Model) searchNext() {
 
 func (m Model) visibleDeps() []api.Deployment {
 	var out []api.Deployment
-	state := strings.ToLower(stateFilters[m.stateIdx])
+	state := ""
+	if m.stateIdx >= 0 && m.stateIdx < len(stateFilters) {
+		state = strings.ToLower(stateFilters[m.stateIdx])
+	}
 	q := strings.ToLower(m.filter)
 	for _, d := range m.deps {
 		if state != "" && d.Status() != state {
