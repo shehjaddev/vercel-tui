@@ -38,6 +38,16 @@ func TestDecodeDeployments(t *testing.T) {
 	}
 }
 
+func TestDecodeNonStringMeta(t *testing.T) {
+	d := decodeList(t, `{"deployments":[{"uid":"dpl_3","name":"web","meta":{"githubCommitRef":"main","builds":3,"flag":true}}]}`)
+	if d[0].Branch() != "main" {
+		t.Errorf("Branch() = %q, want main", d[0].Branch())
+	}
+	if d[0].Meta["builds"] != "3" || d[0].Meta["flag"] != "true" {
+		t.Errorf("non-string meta not coerced: %+v", d[0].Meta)
+	}
+}
+
 func TestDecodeReadyStateFallback(t *testing.T) {
 	d := decodeList(t, `{"deployments":[{"uid":"dpl_2","name":"web","readyState":"BUILDING"}]}`)
 	if d[0].Status() != "building" {

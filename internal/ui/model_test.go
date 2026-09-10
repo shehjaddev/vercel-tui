@@ -63,14 +63,14 @@ func TestAliasInTopDetail(t *testing.T) {
 	m.deps = []api.Deployment{{
 		UID: "dpl_1", Name: "shehjad", State: "READY", Target: "production",
 		URL:  "shehjad-x.vercel.app",
-		Meta: map[string]string{"githubCommitRef": "main", "githubCommitSha": "a7764a7", "githubCommitMessage": "msg"},
+		Meta: api.StringMap{"githubCommitRef": "main", "githubCommitSha": "a7764a7", "githubCommitMessage": "msg"},
 	}}
 	m.depCursor = 0
 	m.mode = modeDeployments
 	model, _ := m.Update(detailsMsg{byKey: map[string]api.Deployment{"dpl_1": {
 		UID: "dpl_1", Name: "shehjad", State: "READY", Target: "production",
 		URL: "shehjad-x.vercel.app", Alias: []string{"www.shehjad.dev"},
-		Meta: map[string]string{"githubCommitRef": "main", "githubCommitSha": "a7764a7", "githubCommitMessage": "msg"},
+		Meta: api.StringMap{"githubCommitRef": "main", "githubCommitSha": "a7764a7", "githubCommitMessage": "msg"},
 	}}})
 	m = model.(Model)
 	// aliases are intentionally not rendered in the top detail anymore, but

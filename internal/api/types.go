@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +26,7 @@ type Deployment struct {
 	Creator    struct {
 		Username string `json:"username"`
 	} `json:"creator"`
-	Meta  map[string]string `json:"meta"`
+	Meta  StringMap         `json:"meta"`
 	Alias []string          `json:"alias"`
 	// project is carried by the detail response; list items leave it empty.
 	Project Project `json:"project"`
@@ -112,6 +114,49 @@ func (d Deployment) Duration() time.Duration {
 		return 0
 	}
 	return time.Duration(d.ReadyMs()-start) * time.Millisecond
+}
+
+// StringMap tolerates the mixed shapes the API has been seen to emit for
+// string maps: strings stay as-is, numbers and bools become their text
+// form, and anything else is kept as compact JSON.
+type StringMap map[string]string
+
+func (m *StringMap) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		*m = nil
+		return nil
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	if raw == nil {
+		*m = nil
+		return nil
+	}
+	out := make(map[string]string, len(raw))
+	for k, v := range raw {
+		switch t := v.(type) {
+		case string:
+			out[k] = t
+		case nil:
+			out[k] = ""
+		case bool:
+			out[k] = strconv.FormatBool(t)
+		case float64:
+			out[k] = strconv.FormatFloat(t, 'f', -1, 64)
+		case json.Number:
+			out[k] = t.String()
+		default:
+			if bb, err := json.Marshal(t); err == nil {
+				out[k] = string(bb)
+			} else {
+				out[k] = fmt.Sprint(t)
+			}
+		}
+	}
+	*m = out
+	return nil
 }
 
 // msTime tolerates the two timestamp shapes the API emits across
