@@ -205,7 +205,7 @@ func (m Model) teamName() string {
 	return m.teams[m.teamIdx].Name
 }
 
-func (m Model) fetchDeps() tea.Cmd {
+func (m *Model) fetchDeps() tea.Cmd {
 	m.loading = true
 	c, team := m.client, m.teamID()
 	project, target := m.projectID, m.targetFlag
@@ -223,7 +223,8 @@ func (m Model) unlinkCmd() (Model, tea.Cmd) {
 	// in-memory project filter so the deployments view shows every project.
 	_ = os.Remove(filepath.Join(m.dir, ".vercel", "project.json"))
 	m.projectID = ""
-	return m, m.fetchDeps()
+	cmd := m.fetchDeps()
+	return m, cmd
 }
 
 // fetchDetail fetches one deployment's full detail (aliases) and caches it
@@ -333,7 +334,8 @@ func (m Model) fetchNextHeads() tea.Cmd {
 	}
 }
 
-func (m Model) fetchLogs() tea.Cmd {
+func (m *Model) fetchLogs() tea.Cmd {
+	m.loading = true
 	c, team := m.client, m.teamID()
 	id := ""
 	if m.detail != nil {
@@ -356,7 +358,7 @@ func (m Model) fetchLogs() tea.Cmd {
 	}
 }
 
-func (m Model) fetchEnvs() tea.Cmd {
+func (m *Model) fetchEnvs() tea.Cmd {
 	m.loading = true
 	c, team, project := m.client, m.teamID(), m.envProject.ID
 	return func() tea.Msg {
@@ -576,7 +578,8 @@ func (m Model) runActionByKey(key string) (tea.Model, tea.Cmd) {
 	case "l":
 		m.logs, m.logScroll = nil, 0
 		m.mode = modeLogs
-		return m, m.fetchLogs()
+		cmd := m.fetchLogs()
+		return m, cmd
 	case "o":
 		return m, openBrowser("https://" + d.URL)
 	case "c":
@@ -601,7 +604,7 @@ func (m Model) runActionByKey(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) loadCurrent() tea.Cmd {
+func (m *Model) loadCurrent() tea.Cmd {
 	switch m.mode {
 	case modeDeployments:
 		return m.fetchDeps()
@@ -652,7 +655,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.user = msg.user
 		m.teams = append([]api.Team{{Name: m.user + " (personal)"}}, msg.teams...)
 		m.err = ""
-		return m, m.loadCurrent()
+		cmd := m.loadCurrent()
+		return m, cmd
 
 	case depsMsg:
 		m.deps = msg.deps
@@ -740,7 +744,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.teams = []api.Team{{Name: msg.user + " (personal)"}}
 		m.mode = modeDeployments
 		m.tokenBuf = ""
-		return m, tea.Batch(fetchTeams(m.client), m.fetchDeps())
+		depsCmd := m.fetchDeps()
+		return m, tea.Batch(fetchTeams(m.client), depsCmd)
 
 	case actionMsg:
 		m.loading = false
@@ -750,13 +755,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.err = msg.err.Error()
 			}
-			return m, m.loadCurrent()
+			retryCmd := m.loadCurrent()
+			return m, retryCmd
 		}
 		m.note, m.noteAt = msg.text, time.Now()
 		if !msg.reload {
 			return m, nil
 		}
-		return m, m.loadCurrent()
+		reloadCmd := m.loadCurrent()
+		return m, reloadCmd
 
 	case errMsg:
 		m.loading = false
@@ -909,7 +916,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.teamIdx = m.teamCursor
 				m.depCursor = 0
 				m.teamSel = false
-				return m, m.loadCurrent()
+				teamCmd := m.loadCurrent()
+				return m, teamCmd
 			}
 			m.teamSel = false
 		}
@@ -927,7 +935,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "r":
-		return m, m.loadCurrent()
+		refreshCmd := m.loadCurrent()
+		return m, refreshCmd
 	case "/":
 		switch m.mode {
 		case modeDeployments:
@@ -1015,7 +1024,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.envProject = api.Project{Name: d.Name, ID: pid}
 				m.mode = modeEnvs
 				m.envCursor = 0
-				return m, m.fetchEnvs()
+				envsCmd := m.fetchEnvs()
+				return m, envsCmd
 			}
 		case "E":
 			if m.depCursor < len(rows) && rows[m.depCursor].project != "" {
@@ -1071,7 +1081,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.detail = d
 				m.logs, m.logScroll = nil, 0
 				m.mode = modeLogs
-				return m, m.fetchLogs()
+				logsCmd := m.fetchLogs()
+				return m, logsCmd
 			}
 		case "o":
 			if d := m.selectedDep(); d != nil {
