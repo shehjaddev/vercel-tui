@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -101,6 +102,9 @@ type Model struct {
 	loading   bool
 	lastLoad  time.Time
 
+	loadCtx    context.Context
+	loadCancel context.CancelFunc
+
 	width, height int
 }
 
@@ -109,10 +113,16 @@ type teamsMsg struct {
 	user  string
 	teams []api.Team
 }
-type depsMsg struct{ deps []api.Deployment }
+type depsMsg struct {
+	deps          []api.Deployment
+	team, project string
+}
 type detailMsg struct{ d *api.Deployment }
 type detailsMsg struct{ byKey map[string]api.Deployment }
-type logsMsg struct{ lines []string }
+type logsMsg struct {
+	lines []string
+	id    string
+}
 type tokenOkMsg struct {
 	user  string
 	token string
@@ -122,7 +132,10 @@ type actionMsg struct {
 	err    error
 	reload bool // whether success should trigger a data refresh
 }
-type envsMsg struct{ envs []api.EnvVar }
+type envsMsg struct {
+	envs          []api.EnvVar
+	team, project string
+}
 type projDomainsMsg struct{ domains map[string][]string }
 type errMsg struct{ err error }
 
@@ -158,14 +171,32 @@ func New(client *api.Client, authed bool, refresh time.Duration, link *config.Pr
 	if !authed {
 		m.mode = modeLogin
 	}
+	m.loadCtx, m.loadCancel = context.WithCancel(context.Background())
 	return m
+}
+
+// scopeCtx returns the context for loads in the current team/scope.
+func (m Model) scopeCtx() context.Context {
+	if m.loadCtx == nil {
+		return context.Background()
+	}
+	return m.loadCtx
+}
+
+// rescope cancels in-flight loads and starts a fresh scope, so late
+// arrivals from the previous team or project are dropped, not rendered.
+func (m *Model) rescope() {
+	if m.loadCancel != nil {
+		m.loadCancel()
+	}
+	m.loadCtx, m.loadCancel = context.WithCancel(context.Background())
 }
 
 func (m Model) Init() tea.Cmd {
 	if m.mode == modeLogin {
 		return nil
 	}
-	return tea.Batch(fetchTeams(m.client), schedule(2*time.Second))
+	return tea.Batch(fetchTeams(m.scopeCtx(), m.client), schedule(2*time.Second))
 }
 
 func schedule(d time.Duration) tea.Cmd {
@@ -177,13 +208,13 @@ func sleep(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return struct{}{} })
 }
 
-func fetchTeams(c *api.Client) tea.Cmd {
+func fetchTeams(ctx context.Context, c *api.Client) tea.Cmd {
 	return func() tea.Msg {
-		u, err := c.User()
+		u, err := c.User(ctx)
 		if err != nil {
 			return errMsg{err}
 		}
-		teams, _ := c.Teams() // tolerate failure; personal scope still works
+		teams, _ := c.Teams(ctx) // tolerate failure; personal scope still works
 		return teamsMsg{user: u.Username, teams: teams}
 	}
 }
@@ -207,14 +238,14 @@ func (m Model) teamName() string {
 
 func (m *Model) fetchDeps() tea.Cmd {
 	m.loading = true
-	c, team := m.client, m.teamID()
+	ctx, c, team := m.scopeCtx(), m.client, m.teamID()
 	project, target := m.projectID, m.targetFlag
 	return func() tea.Msg {
-		deps, err := c.Deployments(project, team, target, 100)
+		deps, err := c.Deployments(ctx, project, team, target, 100)
 		if err != nil {
 			return errMsg{err}
 		}
-		return depsMsg{deps}
+		return depsMsg{deps: deps, team: team, project: project}
 	}
 }
 
@@ -226,6 +257,7 @@ func (m Model) unlinkCmd() (Model, tea.Cmd) {
 		return m, func() tea.Msg { return errMsg{err} }
 	}
 	m.projectID, m.orgID = "", ""
+	m.rescope()
 	cmd := m.fetchDeps()
 	return m, cmd
 }
@@ -235,10 +267,10 @@ func (m Model) unlinkCmd() (Model, tea.Cmd) {
 // which is all Vercel's rate limit reliably allows. Cached so returning to a
 // row is instant.
 func (m Model) fetchDetail(d api.Deployment) tea.Cmd {
-	c, id, team := m.client, d.Key(), m.teamID()
+	ctx, c, id, team := m.scopeCtx(), m.client, d.Key(), m.teamID()
 	key := d.Key()
 	return func() tea.Msg {
-		full, err := c.Deployment(id, team)
+		full, err := c.Deployment(ctx, id, team)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -249,10 +281,10 @@ func (m Model) fetchDetail(d api.Deployment) tea.Cmd {
 // fetchProjectDomains loads the domains bound to a project, for the top
 // detail block. Keyed by project id so each project is fetched once.
 func (m Model) fetchProjectDomains(projectID string) tea.Cmd {
-	c, team := m.client, m.teamID()
+	ctx, c, team := m.scopeCtx(), m.client, m.teamID()
 	return func() tea.Msg {
 		domains := map[string][]string{}
-		if ds, err := c.ProjectDomains(projectID, team); err == nil {
+		if ds, err := c.ProjectDomains(ctx, projectID, team); err == nil {
 			for _, d := range ds {
 				domains[projectID] = append(domains[projectID], d.Name)
 			}
@@ -267,7 +299,7 @@ func (m Model) fetchProjectDomains(projectID string) tea.Cmd {
 // batch (the chain delay between batches keeps us under the rate limit).
 // Every project is fetched once and cached, so navigation never re-requests.
 func (m Model) fetchNextDomains() tea.Cmd {
-	c, team := m.client, m.teamID()
+	ctx, c, team := m.scopeCtx(), m.client, m.teamID()
 	var pids []string
 	for _, g := range m.projectGroups() {
 		if len(g.deployments) == 0 {
@@ -291,7 +323,7 @@ func (m Model) fetchNextDomains() tea.Cmd {
 	return func() tea.Msg {
 		domains := map[string][]string{}
 		for _, pid := range pids {
-			if ds, err := c.ProjectDomains(pid, team); err == nil {
+			if ds, err := c.ProjectDomains(ctx, pid, team); err == nil {
 				for _, d := range ds {
 					domains[pid] = append(domains[pid], d.Name)
 				}
@@ -305,7 +337,7 @@ func (m Model) fetchNextDomains() tea.Cmd {
 // returning them in one message so aliases appear after each batch rather
 // than at the very end. Chains to the next 3 on arrival.
 func (m Model) fetchNextHeads() tea.Cmd {
-	c, team := m.client, m.teamID()
+	ctx, c, team := m.scopeCtx(), m.client, m.teamID()
 	var heads []api.Deployment
 	for _, g := range m.projectGroups() {
 		if len(g.deployments) > 0 {
@@ -324,7 +356,7 @@ func (m Model) fetchNextHeads() tea.Cmd {
 	return func() tea.Msg {
 		byKey := map[string]api.Deployment{}
 		for _, d := range heads {
-			full, err := c.Deployment(d.Key(), team)
+			full, err := c.Deployment(ctx, d.Key(), team)
 			if err != nil {
 				continue
 			}
@@ -336,13 +368,13 @@ func (m Model) fetchNextHeads() tea.Cmd {
 
 func (m *Model) fetchLogs() tea.Cmd {
 	m.loading = true
-	c, team := m.client, m.teamID()
+	ctx, c, team := m.scopeCtx(), m.client, m.teamID()
 	id := ""
 	if m.detail != nil {
 		id = m.detail.Key()
 	}
 	return func() tea.Msg {
-		events, err := c.Events(id, team)
+		events, err := c.Events(ctx, id, team)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -354,24 +386,24 @@ func (m *Model) fetchLogs() tea.Cmd {
 				}
 			}
 		}
-		return logsMsg{lines}
+		return logsMsg{lines: lines, id: id}
 	}
 }
 
 func (m *Model) fetchEnvs() tea.Cmd {
 	m.loading = true
-	c, team, project := m.client, m.teamID(), m.envProject.ID
+	ctx, c, team, project := m.scopeCtx(), m.client, m.teamID(), m.envProject.ID
 	return func() tea.Msg {
-		envs, err := c.EnvVars(project, team)
+		envs, err := c.EnvVars(ctx, project, team)
 		if err != nil {
 			return errMsg{err}
 		}
-		return envsMsg{envs}
+		return envsMsg{envs: envs, team: team, project: project}
 	}
 }
 
 func (m Model) submitEnv() tea.Cmd {
-	c, team := m.client, m.teamID()
+	ctx, c, team := m.scopeCtx(), m.client, m.teamID()
 	project := m.envProject.ID
 	key, value := m.envKey, m.envValue
 	targets := targetPresets[m.envPreset].values
@@ -379,9 +411,9 @@ func (m Model) submitEnv() tea.Cmd {
 	return func() tea.Msg {
 		var err error
 		if editID != "" {
-			err = c.UpdateEnvValue(project, team, editID, value, targets)
+			err = c.UpdateEnvValue(ctx, project, team, editID, value, targets)
 		} else {
-			err = c.CreateEnv(project, team, key, value, targets)
+			err = c.CreateEnv(ctx, project, team, key, value, targets)
 		}
 		text := "env var saved"
 		if editID != "" {
@@ -393,7 +425,9 @@ func (m Model) submitEnv() tea.Cmd {
 
 func validateToken(token string) tea.Cmd {
 	return func() tea.Msg {
-		u, err := api.New(token).User()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		u, err := api.New(token).User(ctx)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -438,8 +472,10 @@ var clipboardTools = [][]string{
 
 func copyURL(url string) tea.Cmd {
 	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		for _, bin := range clipboardTools {
-			cmd := exec.Command(bin[0], bin[1:]...)
+			cmd := exec.CommandContext(ctx, bin[0], bin[1:]...)
 			cmd.Stdin = strings.NewReader(url)
 			if err := cmd.Run(); err == nil {
 				return actionMsg{text: "copied " + url}
@@ -485,11 +521,11 @@ func (m Model) handleConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) runEnvDelete() tea.Cmd {
-	c, team := m.client, m.teamID()
+	ctx, c, team := m.scopeCtx(), m.client, m.teamID()
 	project, key := m.envProject.ID, m.pendingEnv.Key
 	id := m.pendingEnv.ID
 	return func() tea.Msg {
-		err := c.DeleteEnv(project, team, id)
+		err := c.DeleteEnv(ctx, project, team, id)
 		return actionMsg{text: "deleted " + key, err: err, reload: true}
 	}
 }
@@ -505,17 +541,17 @@ func redeployTarget(dep api.Deployment) string {
 }
 
 func (m Model) runAction(pa pendingAction, dep api.Deployment) tea.Cmd {
-	c, team := m.client, m.teamID()
+	ctx, c, team := m.scopeCtx(), m.client, m.teamID()
 	id := dep.Key()
 	switch pa {
 	case pendCancel:
 		return func() tea.Msg {
-			_, err := c.CancelDeployment(id, team)
+			_, err := c.CancelDeployment(ctx, id, team)
 			return actionMsg{text: "build canceled", err: err, reload: true}
 		}
 	case pendDelete:
 		return func() tea.Msg {
-			err := c.DeleteDeployment(id, team)
+			err := c.DeleteDeployment(ctx, id, team)
 			return actionMsg{text: "deployment deleted", err: err, reload: true}
 		}
 	case pendRedeploy:
@@ -524,7 +560,7 @@ func (m Model) runAction(pa pendingAction, dep api.Deployment) tea.Cmd {
 		return func() tea.Msg {
 			var git *api.GitSource
 			if ref := dep.Branch(); ref != "" {
-				p, err := c.ProjectByName(name, team)
+				p, err := c.ProjectByName(ctx, name, team)
 				if err != nil {
 					return errMsg{err}
 				}
@@ -532,17 +568,17 @@ func (m Model) runAction(pa pendingAction, dep api.Deployment) tea.Cmd {
 					git = &api.GitSource{Type: strings.ToLower(p.Link.Type), Org: p.Link.Org, Repo: p.Link.Repo, Ref: ref}
 				}
 			}
-			_, err := c.Redeploy(name, id, team, git, target)
+			_, err := c.Redeploy(ctx, name, id, team, git, target)
 			return actionMsg{text: "redeploy of " + name + " started", err: err, reload: true}
 		}
 	case pendRollback:
 		name := dep.Name
 		return func() tea.Msg {
-			p, err := c.ProjectByName(name, team)
+			p, err := c.ProjectByName(ctx, name, team)
 			if err != nil {
 				return errMsg{err}
 			}
-			err = c.Promote(p.ID, id, team)
+			err = c.Promote(ctx, p.ID, id, team)
 			return actionMsg{text: "promoting " + id + " to production", err: err, reload: true}
 		}
 	}
@@ -679,6 +715,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case depsMsg:
+		if msg.team != m.teamID() || msg.project != m.projectID {
+			return m, nil // stale scope; a newer load is in flight
+		}
 		m.deps = msg.deps
 		m.loading, m.throttled = false, false
 		m.lastLoad = time.Now()
@@ -735,6 +774,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case envsMsg:
+		if msg.team != m.teamID() || msg.project != m.envProject.ID {
+			return m, nil // stale scope; a newer load is in flight
+		}
 		m.envs = msg.envs
 		m.loading, m.throttled = false, false
 		m.lastLoad = time.Now()
@@ -754,6 +796,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case logsMsg:
+		if m.detail == nil || msg.id != m.detail.Key() {
+			return m, nil // stale deployment; a newer log load is in flight
+		}
 		m.logs = msg.lines
 		m.loading, m.throttled = false, false
 
@@ -764,12 +809,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.teams = []api.Team{{Name: msg.user + " (personal)"}}
 		m.mode = modeDeployments
 		m.tokenBuf = ""
+		m.rescope()
 		depsCmd := m.fetchDeps()
-		return m, tea.Batch(fetchTeams(m.client), depsCmd)
+		return m, tea.Batch(fetchTeams(m.scopeCtx(), m.client), depsCmd)
 
 	case actionMsg:
 		m.loading = false
 		if msg.err != nil {
+			if errors.Is(msg.err, context.Canceled) {
+				return m, nil // superseded by a scope switch; tick refreshes
+			}
 			if errors.Is(msg.err, api.ErrThrottled) {
 				m.throttled = true
 			} else {
@@ -787,6 +836,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case errMsg:
 		m.loading = false
+		if errors.Is(msg.err, context.Canceled) {
+			break // superseded by a scope switch; tick refreshes
+		}
 		if errors.Is(msg.err, api.ErrThrottled) {
 			m.throttled = true
 		} else {
@@ -940,6 +992,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.projectID = ""
 					m.orgID = ""
 				}
+				m.rescope()
 				teamCmd := m.loadCurrent()
 				return m, teamCmd
 			}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -69,7 +70,7 @@ func TestDeploymentsPaginates(t *testing.T) {
 
 	c := New("tok")
 	c.baseURL = srv.URL
-	deps, err := c.Deployments("", "", "", 100)
+	deps, err := c.Deployments(context.Background(), "", "", "", 100)
 	if err != nil {
 		t.Fatal(err)
 	}

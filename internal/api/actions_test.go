@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -27,7 +28,7 @@ func TestRequestMethodsAndBody(t *testing.T) {
 	c := New("tok")
 	c.baseURL = srv.URL
 
-	d, err := c.Redeploy("web", "dpl_old", "", nil, "")
+	d, err := c.Redeploy(context.Background(), "web", "dpl_old", "", nil, "")
 	if err != nil || d.UID != "dpl_new" {
 		t.Fatalf("Redeploy: %v %+v", err, d)
 	}
@@ -47,7 +48,7 @@ func TestRequestMethodsAndBody(t *testing.T) {
 
 	c.baseURL = srv.URL
 	git := &GitSource{Type: "github", Org: "shehjaddev", Repo: "web", Ref: "main"}
-	if _, err := c.Redeploy("web", "dpl_old", "", git, "production"); err != nil {
+	if _, err := c.Redeploy(context.Background(), "web", "dpl_old", "", git, "production"); err != nil {
 		t.Fatal(err)
 	}
 	var body2 map[string]any
@@ -67,7 +68,7 @@ func TestAPIErrorMessageParsing(t *testing.T) {
 
 	c := New("tok")
 	c.baseURL = srv.URL
-	err := c.DeleteDeployment("dpl_x", "")
+	err := c.DeleteDeployment(context.Background(), "dpl_x", "")
 	want := `DELETE /v13/deployments/dpl_x: 403 not allowed`
 	if err == nil || err.Error() != want {
 		t.Errorf("err = %v, want %q", err, want)
@@ -84,7 +85,7 @@ func TestPromotePath(t *testing.T) {
 
 	c := New("tok")
 	c.baseURL = srv.URL
-	if err := c.Promote("proj_1", "dpl_1", ""); err != nil {
+	if err := c.Promote(context.Background(), "proj_1", "dpl_1", ""); err != nil {
 		t.Fatal(err)
 	}
 	if gotPath != "/v10/projects/proj_1/promote/dpl_1" {
@@ -106,7 +107,7 @@ func TestCancelSendsJSONBody(t *testing.T) {
 	defer srv.Close()
 	c := New("tok")
 	c.baseURL = srv.URL
-	if _, err := c.CancelDeployment("dpl_1", ""); err != nil {
+	if _, err := c.CancelDeployment(context.Background(), "dpl_1", ""); err != nil {
 		t.Fatal(err)
 	}
 	if gotPath != "/v12/deployments/dpl_1/cancel" {

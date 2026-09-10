@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -25,12 +26,12 @@ func TestEnvCRUD(t *testing.T) {
 	c := New("tok")
 	c.baseURL = srv.URL
 
-	envs, err := c.EnvVars("proj_1", "")
+	envs, err := c.EnvVars(context.Background(), "proj_1", "")
 	if err != nil || len(envs) != 1 || envs[0].Key != "API_KEY" || !envs[0].Sensitive() {
 		t.Fatalf("list: %v %+v", err, envs)
 	}
 
-	err = c.CreateEnv("proj_1", "", "K", "v", []string{"production"})
+	err = c.CreateEnv(context.Background(), "proj_1", "", "K", "v", []string{"production"})
 	if err != nil || method != "POST" || path != "/v10/projects/proj_1/env" {
 		t.Errorf("create: %s %s %v", method, path, err)
 	}
@@ -40,7 +41,7 @@ func TestEnvCRUD(t *testing.T) {
 		t.Errorf("create body: %s", body)
 	}
 
-	err = c.UpdateEnvValue("proj_1", "", "env_1", "newval", nil)
+	err = c.UpdateEnvValue(context.Background(), "proj_1", "", "env_1", "newval", nil)
 	if err != nil || method != "PATCH" || path != "/v10/projects/proj_1/env/env_1" {
 		t.Errorf("update: %s %s %v", method, path, err)
 	}
@@ -49,7 +50,7 @@ func TestEnvCRUD(t *testing.T) {
 		t.Errorf("update body: %s", body)
 	}
 
-	if err := c.DeleteEnv("proj_1", "", "env_1"); err != nil || method != "DELETE" {
+	if err := c.DeleteEnv(context.Background(), "proj_1", "", "env_1"); err != nil || method != "DELETE" {
 		t.Errorf("delete: %s %v", method, err)
 	}
 }
@@ -67,7 +68,7 @@ func TestDomains(t *testing.T) {
 	c := New("tok")
 	c.baseURL = srv.URL
 
-	d, err := c.ProjectDomains("proj_1", "")
+	d, err := c.ProjectDomains(context.Background(), "proj_1", "")
 	if err != nil || len(d) != 1 || d[0].Name != "example.com" || !d[0].Verified {
 		t.Fatalf("project domains: %v %+v (path=%s)", err, d, gotPath)
 	}
@@ -75,7 +76,7 @@ func TestDomains(t *testing.T) {
 		t.Errorf("path = %s", gotPath)
 	}
 
-	d, err = c.TeamDomains("")
+	d, err = c.TeamDomains(context.Background(), "")
 	if err != nil || len(d) != 1 || gotPath != "/v5/domains" {
 		t.Fatalf("team domains: %v %+v path=%s", err, d, gotPath)
 	}

@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,8 +45,8 @@ func withQuery(path string, q url.Values) string {
 	return path
 }
 
-func (c *Client) get(path string, query url.Values, out any) error {
-	body, err := c.do(http.MethodGet, c.baseURL+withQuery(path, query), nil)
+func (c *Client) get(ctx context.Context, path string, query url.Values, out any) error {
+	body, err := c.do(ctx, http.MethodGet, c.baseURL+withQuery(path, query), nil)
 	if err != nil {
 		return err
 	}
@@ -53,7 +54,7 @@ func (c *Client) get(path string, query url.Values, out any) error {
 }
 
 // request performs a write call with an optional JSON body.
-func (c *Client) request(method, path string, query url.Values, body any, out any) error {
+func (c *Client) request(ctx context.Context, method, path string, query url.Values, body any, out any) error {
 	var payload []byte
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -62,7 +63,7 @@ func (c *Client) request(method, path string, query url.Values, body any, out an
 		}
 		payload = b
 	}
-	bodyBytes, err := c.do(method, c.baseURL+withQuery(path, query), payload)
+	bodyBytes, err := c.do(ctx, method, c.baseURL+withQuery(path, query), payload)
 	if err != nil {
 		return err
 	}
@@ -75,17 +76,21 @@ func (c *Client) request(method, path string, query url.Values, body any, out an
 // do performs a request with 429 backoff and returns the raw response
 // body. Non-2xx responses become errors. A stale OAuth token is refreshed
 // at most once per call.
-func (c *Client) do(method, fullURL string, payload []byte) ([]byte, error) {
+func (c *Client) do(ctx context.Context, method, fullURL string, payload []byte) ([]byte, error) {
 	refreshed := false
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
-			time.Sleep(time.Duration(1<<uint(attempt-1)) * time.Second)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(1<<uint(attempt-1)) * time.Second):
+			}
 		}
 		var reader io.Reader
 		if payload != nil {
 			reader = bytes.NewReader(payload)
 		}
-		req, err := http.NewRequest(method, fullURL, reader)
+		req, err := http.NewRequestWithContext(ctx, method, fullURL, reader)
 		if err != nil {
 			return nil, err
 		}
