@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,9 +21,13 @@ var ErrThrottled = errors.New("throttled by vercel api")
 
 type Client struct {
 	http    *http.Client
-	token   string
 	baseURL string
+
+	mu      sync.Mutex // guards token and refresh
+	token   string
 	refresh func() (string, error) // optional; refreshes a stale OAuth token
+
+	refreshMu sync.Mutex // serializes token exchanges
 }
 
 func New(token string) *Client {
@@ -35,7 +40,46 @@ func New(token string) *Client {
 
 // SetRefresh lets the client self-heal a stale OAuth access token: when the
 // API answers 403, it asks for a new one and retries once.
-func (c *Client) SetRefresh(fn func() (string, error)) { c.refresh = fn }
+func (c *Client) SetRefresh(fn func() (string, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.refresh = fn
+}
+
+// credentials returns the token to send with the next request and the
+// refresh hook, if one is set. Every command the UI batches runs in its own
+// goroutine, so both move under the lock.
+func (c *Client) credentials() (string, func() (string, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.token, c.refresh
+}
+
+func (c *Client) setToken(token string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.token = token
+}
+
+// refreshIfStale exchanges the access token that produced a 403 for a fresh
+// one. Several calls can be rejected at the same moment, and the first one to
+// get here does the exchange while the rest reuse its result: a second
+// exchange would rotate the CLI's refresh token again and could leave both
+// tools logged out.
+func (c *Client) refreshIfStale(used string, refresh func() (string, error)) (string, error) {
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+	current, _ := c.credentials()
+	if current != used {
+		return current, nil // another call already refreshed it
+	}
+	token, err := refresh()
+	if err != nil {
+		return "", err
+	}
+	c.setToken(token)
+	return token, nil
+}
 
 // withQuery appends "?query" only when there is one.
 func withQuery(path string, q url.Values) string {
@@ -75,7 +119,7 @@ func (c *Client) request(ctx context.Context, method, path string, query url.Val
 
 // do performs a request with 429 backoff and returns the raw response
 // body. Non-2xx responses become errors. A stale OAuth token is refreshed
-// at most once per call.
+// at most once per call, and concurrent calls share a single exchange.
 func (c *Client) do(ctx context.Context, method, fullURL string, payload []byte) ([]byte, error) {
 	refreshed := false
 	for attempt := 0; attempt < 3; attempt++ {
@@ -94,7 +138,8 @@ func (c *Client) do(ctx context.Context, method, fullURL string, payload []byte)
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("Authorization", "Bearer "+c.token)
+		token, refresh := c.credentials()
+		req.Header.Set("Authorization", "Bearer "+token)
 		if len(payload) > 0 {
 			req.Header.Set("Content-Type", "application/json")
 		}
@@ -115,9 +160,8 @@ func (c *Client) do(ctx context.Context, method, fullURL string, payload []byte)
 			continue
 		}
 		if resp.StatusCode >= 400 {
-			if resp.StatusCode == http.StatusForbidden && !refreshed && c.refresh != nil {
-				if tok, rerr := c.refresh(); rerr == nil {
-					c.token = tok
+			if resp.StatusCode == http.StatusForbidden && !refreshed && refresh != nil {
+				if _, rerr := c.refreshIfStale(token, refresh); rerr == nil {
 					refreshed = true
 					attempt-- // retry the same slot without burning 429 backoff
 					continue
