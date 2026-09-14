@@ -47,6 +47,18 @@ func (c columns) widths() []int {
 	return out
 }
 
+// width is the width of the named column, or 0 when the table has no such
+// column. Cells ask for their column by name so that adding or dropping a
+// column cannot leave them truncating against a neighbour's width.
+func (c columns) width(title string) int {
+	for _, col := range c {
+		if col.title == title {
+			return col.width
+		}
+	}
+	return 0
+}
+
 func (c columns) titles() []string {
 	out := make([]string, len(c))
 	for i, col := range c {
@@ -55,16 +67,25 @@ func (c columns) titles() []string {
 	return out
 }
 
+// The board's columns are named so cells can look their width up by title.
+const (
+	colProject  = "PROJECT"
+	colState    = "STATE"
+	colBranch   = "BRANCH"
+	colCommit   = "COMMIT"
+	colAge      = "AGE"
+	colActivity = "ACTIVITY"
+)
+
 // The board is sized for its content: a name, a state, a branch, a short sha
 // and two relative times, tight enough to read as one block.
 var boardColumns = columns{
-	{title: "", width: 2},
-	{title: "PROJECT", width: 20},
-	{title: "STATE", width: 10},
-	{title: "BRANCH", width: 22},
-	{title: "COMMIT", width: 9},
-	{title: "AGE", width: 10},
-	{title: "ACTIVITY", width: 11},
+	{title: colProject, width: 20},
+	{title: colState, width: 10},
+	{title: colBranch, width: 22},
+	{title: colCommit, width: 9},
+	{title: colAge, width: 10},
+	{title: colActivity, width: 11},
 }
 
 var envColumns = columns{
@@ -154,6 +175,7 @@ func (m Model) deploymentsView() string {
 
 	// --- list ---
 	widths := boardColumns.widths()
+	projectWidth := boardColumns.width(colProject)
 	var body []string
 	body = append(body, headerStyle.Render(row(widths, boardColumns.titles()...)))
 	maxRows := max(m.height-9, 1)
@@ -165,9 +187,10 @@ func (m Model) deploymentsView() string {
 		switch {
 		case r.project != "":
 			// a head row summarises the project with its latest deployment
-			cells = boardCells(trunc(r.project, widths[1]), *r.dep, widths, sel)
+			cells = boardCells(trunc(r.project, projectWidth), *r.dep, sel)
 		case r.dep != nil:
-			cells = boardCells(childIndent+trunc(r.dep.Name, widths[1]-6), *r.dep, widths, sel)
+			// a child's name shares the project column with its indent
+			cells = boardCells(childIndent+trunc(r.dep.Name, projectWidth-6), *r.dep, sel)
 		}
 		line := row(widths, cells...)
 		if sel {
@@ -246,26 +269,16 @@ func stateCell(state string, selected bool) string {
 	return stateStyle[state].Render(strings.ToUpper(state))
 }
 
-// boardMarker is the marker for the board, where the rows that are not under
-// the cursor carry one extra cell. That indent pulls the cursor row left of
-// the names above and below it, which is what makes it stand out.
-func boardMarker(selected bool) string {
-	if selected {
-		return marker(true)
-	}
-	return marker(false) + " "
-}
-
 // boardCells lays out one row of the deployments board. The project column is
 // the project name on a head row, and the deployment's own name — indented
-// under its project — on a child row.
-func boardCells(projectColumn string, d api.Deployment, widths []int, selected bool) []string {
+// under its project — on a child row. The board has no marker column: the row
+// under the cursor is the one carrying the highlight.
+func boardCells(projectColumn string, d api.Deployment, selected bool) []string {
 	return []string{
-		boardMarker(selected),
 		projectColumn,
 		stateCell(d.Status(), selected),
-		trunc(d.Branch(), widths[3]),
-		trunc(d.ShortSHA(), widths[4]),
+		trunc(d.Branch(), boardColumns.width(colBranch)),
+		trunc(d.ShortSHA(), boardColumns.width(colCommit)),
 		relAge(d.CreatedMs()),
 		relAge(d.LastActivityMs()),
 	}

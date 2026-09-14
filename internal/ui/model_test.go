@@ -539,26 +539,27 @@ func columnOffset(line, cell string) int {
 	return lipgloss.Width(line[:i])
 }
 
-// The board's rows carry a wider blank marker than the selected row, so the
-// cursor row pulls one cell left of the rest; every other row sits one cell in
-// from the header. That indent is the point, so it is what the test pins.
-func TestBoardRowIndent(t *testing.T) {
+// The board has no marker column: it starts at the left edge and every row
+// lays its cells out where the header puts them. The row under the cursor is
+// the one wearing the highlight.
+func TestBoardColumnsLineUp(t *testing.T) {
 	m := newTestModel()
 	m.width, m.height = 120, 40
-	m.expanded = "web"
+	m.expanded = "curriculum-site"
 	m.deps = []api.Deployment{
-		{UID: "d1", Name: "web", State: "READY", Target: "production", URL: "web-x.vercel.app",
+		{UID: "d1", Name: "curriculum-site", State: "READY", Target: "production",
 			Created: time.Now().Add(-2 * time.Hour).UnixMilli(),
-			Meta:    api.StringMap{"githubCommitRef": "main", "githubCommitSha": "a1b2c3d4e5f6"}},
-		{UID: "d2", Name: "api", State: "BUILDING", Target: "preview", URL: "api-y.vercel.app",
+			Meta:    api.StringMap{"githubCommitRef": "feat/board-columns", "githubCommitSha": "a1b2c3d4e5f6"}},
+		{UID: "d2", Name: "api", State: "BUILDING", Target: "preview",
 			Created: time.Now().Add(-time.Minute).UnixMilli(),
 			Meta:    api.StringMap{"githubCommitRef": "main", "githubCommitSha": "9f8e7d6c5b4a"}},
-		{UID: "d3", Name: "web", State: "READY", Target: "preview", URL: "web-y.vercel.app",
+		{UID: "d3", Name: "curriculum-site", State: "READY", Target: "preview",
 			Created: time.Now().Add(-time.Hour).UnixMilli(),
-			Meta:    api.StringMap{"githubCommitRef": "main", "githubCommitSha": "c0ffee123456"}},
+			Meta:    api.StringMap{"githubCommitRef": "feat/board-columns", "githubCommitSha": "c0ffee123456"}},
 	}
 
-	lines := strings.Split(m.View(), "\n")
+	view := m.View()
+	lines := strings.Split(view, "\n")
 	header := -1
 	for i, line := range lines {
 		if strings.Contains(line, "PROJECT") {
@@ -567,10 +568,22 @@ func TestBoardRowIndent(t *testing.T) {
 		}
 	}
 	if header < 0 {
-		t.Fatalf("no board header rendered:\n%s", m.View())
+		t.Fatalf("no board header rendered:\n%s", view)
 	}
-	stateCol := columnOffset(lines[header], "STATE")
-	headerRow := lines[header]
+
+	if got := columnOffset(lines[header], "PROJECT"); got != 0 {
+		t.Errorf("PROJECT starts at %d, want the left edge", got)
+	}
+	starts := map[string]int{
+		"STATE":  columnOffset(lines[header], "STATE"),
+		"BRANCH": columnOffset(lines[header], "BRANCH"),
+		"COMMIT": columnOffset(lines[header], "COMMIT"),
+	}
+	cells := map[string][]string{
+		"STATE":  {"READY", "BUILDING"},
+		"BRANCH": {"feat/board-columns", "main"},
+		"COMMIT": {"a1b2c3d", "9f8e7d6", "c0ffee1"},
+	}
 
 	rows := 0
 	for _, line := range lines[header+1:] {
@@ -578,20 +591,18 @@ func TestBoardRowIndent(t *testing.T) {
 			break
 		}
 		rows++
-		// the cursor is on the first row: it lines up with the header, and
-		// every other row is one column further in
-		want := stateCol
-		if rows > 1 {
-			want = stateCol + 1
+		if strings.Contains(line, "❯") {
+			t.Errorf("board row carries a marker: %q", line)
 		}
-		for _, state := range []string{"READY", "BUILDING"} {
-			i := strings.Index(line, state)
-			if i < 0 {
-				continue
-			}
-			if got := lipgloss.Width(line[:i]); got != want {
-				t.Errorf("row %d: %s starts at %d, want %d (header %s at %d): %q",
-					rows, state, got, want, "STATE", stateCol, line)
+		for col, values := range cells {
+			for _, v := range values {
+				i := strings.Index(line, v)
+				if i < 0 {
+					continue
+				}
+				if got := lipgloss.Width(line[:i]); got != starts[col] {
+					t.Errorf("%s %q starts at %d, but the %s column starts at %d: %q", col, v, got, col, starts[col], line)
+				}
 			}
 		}
 	}
@@ -599,48 +610,49 @@ func TestBoardRowIndent(t *testing.T) {
 		t.Fatalf("checked %d rows, want 4 (a head and two children for the expanded project, plus the other head)", rows)
 	}
 
-	// the marker is followed by a gap, so it never touches the first character
-	cursor := lines[header+1]
-	if mark, name := columnOffset(cursor, "❯"), columnOffset(cursor, "web"); mark < 0 || name-mark != 2 {
-		t.Errorf("marker at %d and name at %d, want the marker then one gap cell: %q", mark, name, cursor)
+	// a branch that fits its column is shown whole: a cell truncating against
+	// the wrong column's width would cut it short
+	if !strings.Contains(view, "feat/board-columns") {
+		t.Errorf("a branch that fits its column was truncated:\n%s", view)
 	}
-	_ = headerRow
+}
 
-	t.Run("env vars", func(t *testing.T) {
-		m := newTestModel()
-		m.width, m.height = 120, 40
-		m.mode = modeEnvs
-		m.envProject = api.Project{Name: "web", ID: "prj_1"}
-		m.envs = []api.EnvVar{
-			{ID: "e1", Key: "API_KEY", Target: []string{"production", "preview"}, Type: "encrypted"},
-			{ID: "e2", Key: "TOKEN", Target: []string{"production"}, Type: "sensitive"},
-		}
+// The env table keeps a marker in front of the cursor row, with a gap before
+// the first character, and its rows line up with its header.
+func TestEnvTableMarkerAndColumns(t *testing.T) {
+	m := newTestModel()
+	m.width, m.height = 120, 40
+	m.mode = modeEnvs
+	m.envProject = api.Project{Name: "web", ID: "prj_1"}
+	m.envs = []api.EnvVar{
+		{ID: "e1", Key: "API_KEY", Target: []string{"production", "preview"}, Type: "encrypted"},
+		{ID: "e2", Key: "TOKEN", Target: []string{"production"}, Type: "sensitive"},
+	}
 
-		header, dataRow := "", ""
-		for _, line := range strings.Split(m.View(), "\n") {
-			switch {
-			case strings.Contains(line, "TARGETS"):
-				header = line
-			case strings.Contains(line, "API_KEY"):
-				dataRow = line
-			}
+	header, dataRow := "", ""
+	for _, line := range strings.Split(m.View(), "\n") {
+		switch {
+		case strings.Contains(line, "TARGETS"):
+			header = line
+		case strings.Contains(line, "API_KEY"):
+			dataRow = line
 		}
-		if header == "" || dataRow == "" {
-			t.Fatalf("env table not rendered:\n%s", m.View())
+	}
+	if header == "" || dataRow == "" {
+		t.Fatalf("env table not rendered:\n%s", m.View())
+	}
+	if mark, key := columnOffset(dataRow, "❯"), columnOffset(dataRow, "API_KEY"); mark < 0 || key-mark != 2 {
+		t.Errorf("marker at %d and key at %d, want the marker then one gap cell: %q", mark, key, dataRow)
+	}
+	for _, p := range [][2]string{{"KEY", "API_KEY"}, {"TARGETS", "production, preview"}, {"TYPE", "encrypted"}} {
+		want, got := columnOffset(header, p[0]), columnOffset(dataRow, p[1])
+		if want < 0 || got < 0 {
+			t.Fatalf("%s / %s not rendered in the row:\n%s", p[0], p[1], m.View())
 		}
-		if mark, key := columnOffset(dataRow, "❯"), columnOffset(dataRow, "API_KEY"); mark < 0 || key-mark != 2 {
-			t.Errorf("marker at %d and key at %d, want the marker then one gap cell: %q", mark, key, dataRow)
+		if want != got {
+			t.Errorf("%s starts at %d, but its cell %q starts at %d", p[0], want, p[1], got)
 		}
-		for _, p := range [][2]string{{"KEY", "API_KEY"}, {"TARGETS", "production, preview"}, {"TYPE", "encrypted"}} {
-			want, got := columnOffset(header, p[0]), columnOffset(dataRow, p[1])
-			if want < 0 || got < 0 {
-				t.Fatalf("%s / %s not rendered in the row:\n%s", p[0], p[1], m.View())
-			}
-			if want != got {
-				t.Errorf("%s starts at %d, but its cell %q starts at %d", p[0], want, p[1], got)
-			}
-		}
-	})
+	}
 }
 
 // ? opens the key list, the next key closes it without also running, and q
