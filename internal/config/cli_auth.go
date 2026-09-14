@@ -24,16 +24,26 @@ type cliAuth struct {
 	RefreshToken string `json:"refreshToken"`
 }
 
+// readCLIAuth parses the CLI's credentials file. ok is false when the file is
+// missing or isn't JSON, which is how both callers walk the candidate paths.
+func readCLIAuth(path string) (cliAuth, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return cliAuth{}, false
+	}
+	var a cliAuth
+	if json.Unmarshal(b, &a) != nil {
+		return cliAuth{}, false
+	}
+	return a, true
+}
+
 // LoadCLIAuth returns the access and refresh tokens from the official CLI's
-// credentials file, preferring the first one found.
+// credentials file, preferring the first one that has a token.
 func LoadCLIAuth() (token, refresh string, ok bool) {
 	for _, p := range cliAuthPaths() {
-		b, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		var a cliAuth
-		if json.Unmarshal(b, &a) != nil {
+		a, ok := readCLIAuth(p)
+		if !ok {
 			continue
 		}
 		if a.RefreshToken == "" && a.Token == "" {
@@ -45,8 +55,8 @@ func LoadCLIAuth() (token, refresh string, ok bool) {
 }
 
 // SaveCLIAuth writes a fresh access (and refresh, if returned) token back to
-// the CLI credentials file, preserving the other fields so the CLI and vtui
-// stay in sync.
+// the first credentials file that parses, preserving the other fields so the
+// CLI and vtui stay in sync.
 func SaveCLIAuth(token, refresh string) error {
 	for _, p := range cliAuthPaths() {
 		b, err := os.ReadFile(p)

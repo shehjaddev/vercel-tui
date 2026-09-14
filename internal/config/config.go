@@ -9,21 +9,23 @@ import (
 
 // ResolveToken finds a Vercel token: explicit flag, environment,
 // vtui's own storage, then credentials saved by the official CLI.
-func ResolveToken(flag string) string {
-	if flag != "" {
-		return flag
+func ResolveToken(explicit string) string {
+	if explicit != "" {
+		return explicit
 	}
 	if env := os.Getenv("VERCEL_TOKEN"); env != "" {
 		return env
 	}
-	if b, err := os.ReadFile(vtuiTokenPath()); err == nil {
-		if t := strings.TrimSpace(string(b)); t != "" {
-			return t
+	if path, err := vtuiTokenPath(); err == nil {
+		if b, err := os.ReadFile(path); err == nil {
+			if t := strings.TrimSpace(string(b)); t != "" {
+				return t
+			}
 		}
 	}
 	for _, p := range cliAuthPaths() {
-		if t := tokenFromCLIAuth(p); t != "" {
-			return t
+		if a, ok := readCLIAuth(p); ok && a.Token != "" {
+			return a.Token
 		}
 	}
 	return ""
@@ -31,18 +33,27 @@ func ResolveToken(flag string) string {
 
 // StoreToken saves a validated token for future runs.
 func StoreToken(token string) error {
-	path := vtuiTokenPath()
+	path, err := vtuiTokenPath()
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	return os.WriteFile(path, []byte(token), 0o600)
 }
 
-func vtuiTokenPath() string {
-	dir, _ := os.UserConfigDir()
-	return filepath.Join(dir, "vtui", "token")
+// vtuiTokenPath is where vtui keeps the token it was given.
+func vtuiTokenPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "vtui", "token"), nil
 }
 
+// cliAuthPaths are the places the official CLI has kept its credentials, most
+// recent location first.
 func cliAuthPaths() []string {
 	var paths []string
 	if dir, err := os.UserConfigDir(); err == nil {
@@ -55,20 +66,6 @@ func cliAuthPaths() []string {
 		)
 	}
 	return paths
-}
-
-func tokenFromCLIAuth(path string) string {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	var a struct {
-		Token string `json:"token"`
-	}
-	if json.Unmarshal(b, &a) != nil {
-		return ""
-	}
-	return a.Token
 }
 
 // ProjectLink mirrors .vercel/project.json, the artifact the official
