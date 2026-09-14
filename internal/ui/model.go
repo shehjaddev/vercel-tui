@@ -492,34 +492,52 @@ func openBrowser(target string) tea.Cmd {
 		default:
 			candidates = append(candidates, []string{"xdg-open"})
 		}
-		for _, c := range candidates {
-			if err := exec.Command(c[0], append(c[1:], target)...).Start(); err == nil {
-				return nil
+		for _, tool := range candidates {
+			cmd := exec.Command(tool[0], append(tool[1:], target)...)
+			if err := cmd.Start(); err != nil {
+				continue
 			}
+			// the browser outlives us; release the handle instead of keeping
+			// a process entry for every press of "o"
+			_ = cmd.Process.Release()
+			return nil
 		}
 		return errMsg{errors.New("could not open browser")}
 	}
 }
 
-var clipboardTools = [][]string{
-	{"wl-copy"},
-	{"xclip", "-selection", "clipboard"},
-	{"xsel", "--clipboard", "--input"},
-	{"pbcopy"},
+// clipboardTools lists the commands that put stdin on the clipboard, most
+// likely first for this platform.
+func clipboardTools() [][]string {
+	switch runtime.GOOS {
+	case "darwin":
+		return [][]string{{"pbcopy"}}
+	case "windows":
+		return [][]string{{"clip"}}
+	default:
+		return [][]string{
+			{"wl-copy"},
+			{"xclip", "-selection", "clipboard"},
+			{"xsel", "--clipboard", "--input"},
+		}
+	}
 }
 
 func copyURL(url string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		for _, bin := range clipboardTools {
+		tools := clipboardTools()
+		tried := make([]string, 0, len(tools))
+		for _, bin := range tools {
+			tried = append(tried, bin[0])
 			cmd := exec.CommandContext(ctx, bin[0], bin[1:]...)
 			cmd.Stdin = strings.NewReader(url)
 			if err := cmd.Run(); err == nil {
 				return actionMsg{text: "copied " + url}
 			}
 		}
-		return errMsg{errors.New("no clipboard tool found (wl-copy, xclip, xsel, pbcopy)")}
+		return errMsg{fmt.Errorf("no clipboard tool found (tried %s)", strings.Join(tried, ", "))}
 	}
 }
 
