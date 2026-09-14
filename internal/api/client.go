@@ -16,6 +16,15 @@ import (
 
 const defaultBase = "https://api.vercel.com"
 
+const (
+	// maxAttempts bounds how many times a throttled request is retried.
+	maxAttempts = 3
+	// maxReadBody and maxWriteBody cap a response body: reads carry pages and
+	// event streams, a write's reply is a single object.
+	maxReadBody  = 32 << 20
+	maxWriteBody = 1 << 20
+)
+
 // ErrThrottled is returned when the API keeps answering 429 after retries.
 var ErrThrottled = errors.New("throttled by vercel api")
 
@@ -89,8 +98,14 @@ func withQuery(path string, q url.Values) string {
 	return path
 }
 
+// getRaw performs a GET and hands back the body untouched, for endpoints that
+// answer with something other than a JSON object.
+func (c *Client) getRaw(ctx context.Context, path string, query url.Values) ([]byte, error) {
+	return c.do(ctx, http.MethodGet, c.url(path, query), nil)
+}
+
 func (c *Client) get(ctx context.Context, path string, query url.Values, out any) error {
-	body, err := c.do(ctx, http.MethodGet, c.baseURL+withQuery(path, query), nil)
+	body, err := c.getRaw(ctx, path, query)
 	if err != nil {
 		return err
 	}
@@ -107,7 +122,7 @@ func (c *Client) request(ctx context.Context, method, path string, query url.Val
 		}
 		payload = b
 	}
-	bodyBytes, err := c.do(ctx, method, c.baseURL+withQuery(path, query), payload)
+	bodyBytes, err := c.do(ctx, method, c.url(path, query), payload)
 	if err != nil {
 		return err
 	}
@@ -117,61 +132,91 @@ func (c *Client) request(ctx context.Context, method, path string, query url.Val
 	return nil
 }
 
-// do performs a request with 429 backoff and returns the raw response
-// body. Non-2xx responses become errors. A stale OAuth token is refreshed
-// at most once per call, and concurrent calls share a single exchange.
+// url is the absolute URL of an endpoint, with its query when it has one.
+func (c *Client) url(path string, q url.Values) string {
+	return c.baseURL + withQuery(path, q)
+}
+
+// do performs a request, waiting out throttling while the API asks us to, and
+// returns the raw response body. Non-2xx responses become errors. A stale
+// OAuth token is refreshed at most once per call, and concurrent calls share
+// one exchange.
 func (c *Client) do(ctx context.Context, method, fullURL string, payload []byte) ([]byte, error) {
 	refreshed := false
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < maxAttempts; {
 		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(time.Duration(1<<uint(attempt-1)) * time.Second):
+			if err := wait(ctx, backoff(attempt)); err != nil {
+				return nil, err
 			}
-		}
-		var reader io.Reader
-		if payload != nil {
-			reader = bytes.NewReader(payload)
-		}
-		req, err := http.NewRequestWithContext(ctx, method, fullURL, reader)
-		if err != nil {
-			return nil, err
 		}
 		token, refresh := c.credentials()
-		req.Header.Set("Authorization", "Bearer "+token)
-		if len(payload) > 0 {
-			req.Header.Set("Content-Type", "application/json")
-		}
-		resp, err := c.http.Do(req)
+		status, body, err := c.send(ctx, method, fullURL, payload, token)
 		if err != nil {
 			return nil, err
 		}
-		limit := int64(32 << 20)
-		if method != http.MethodGet {
-			limit = 1 << 20
-		}
-		body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
-		resp.Body.Close()
-		if err != nil {
-			return nil, err
-		}
-		if resp.StatusCode == http.StatusTooManyRequests {
-			continue
-		}
-		if resp.StatusCode >= 400 {
-			if resp.StatusCode == http.StatusForbidden && !refreshed && refresh != nil {
-				if _, rerr := c.refreshIfStale(token, refresh); rerr == nil {
-					refreshed = true
-					attempt-- // retry the same slot without burning 429 backoff
-					continue
-				}
+		switch {
+		case status == http.StatusTooManyRequests:
+			attempt++ // throttled: back off, and only count the wait
+		case status == http.StatusForbidden && !refreshed && refresh != nil:
+			// a replaced token retries in place, without spending a backoff
+			if _, rerr := c.refreshIfStale(token, refresh); rerr != nil {
+				return nil, apiError(method, fullURL, status, body)
 			}
-			return nil, apiError(method, fullURL, resp.StatusCode, body)
+			refreshed = true
+		case status >= 400:
+			return nil, apiError(method, fullURL, status, body)
+		default:
+			return body, nil
 		}
-		return body, nil
 	}
 	return nil, ErrThrottled
+}
+
+// send performs one request and reports the status and body. The body is
+// capped so a runaway response cannot exhaust memory: a read can carry a page
+// of deployments or a build's events, a write's reply is small.
+func (c *Client) send(ctx context.Context, method, fullURL string, payload []byte, token string) (int, []byte, error) {
+	var reader io.Reader
+	if payload != nil {
+		reader = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, fullURL, reader)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	if len(payload) > 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	limit := int64(maxReadBody)
+	if method != http.MethodGet {
+		limit = maxWriteBody
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	if err != nil {
+		return 0, nil, err
+	}
+	return resp.StatusCode, body, nil
+}
+
+// wait sleeps for d, or returns early if the context ends first.
+func wait(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
+// backoff is how long to wait before retrying a throttled request.
+func backoff(attempt int) time.Duration {
+	return time.Duration(1<<uint(attempt-1)) * time.Second
 }
 
 func apiError(method, rawURL string, status int, body []byte) error {

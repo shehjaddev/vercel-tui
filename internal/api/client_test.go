@@ -3,11 +3,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // The UI batches its fetches, so several requests can be rejected with 403 at
@@ -76,5 +78,60 @@ func TestRefreshFailureKeepsError(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Fatalf("refresh attempts = %d, want 1", got)
+	}
+}
+
+// Throttling is waited out a bounded number of times, then reported: a 429 is
+// the API asking for room, not an error to hand the user on the first answer.
+func TestThrottledRequestGivesUpAfterBackoff(t *testing.T) {
+	var requests int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	c := New("tok")
+	c.baseURL = srv.URL
+
+	start := time.Now()
+	_, err := c.User(context.Background())
+	waited := time.Since(start)
+
+	if !errors.Is(err, ErrThrottled) {
+		t.Fatalf("err = %v, want ErrThrottled", err)
+	}
+	if got := atomic.LoadInt32(&requests); got != maxAttempts {
+		t.Fatalf("requests = %d, want %d attempts", got, maxAttempts)
+	}
+	// 1s then 2s between the three attempts
+	if waited < 3*time.Second {
+		t.Fatalf("gave up after %v, want the backoff to have been waited out", waited)
+	}
+}
+
+// A token that is replaced retries the request in place, without spending one
+// of the throttling attempts.
+func TestRefreshRetryDoesNotSpendAnAttempt(t *testing.T) {
+	var requests int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		if r.Header.Get("Authorization") == "Bearer fresh" {
+			json.NewEncoder(w).Encode(map[string]any{"user": map[string]any{"username": "shehjad"}})
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	c := New("stale")
+	c.baseURL = srv.URL
+	c.SetRefresh(func() (string, error) { return "fresh", nil })
+
+	if _, err := c.User(context.Background()); err != nil {
+		t.Fatalf("User: %v", err)
+	}
+	if got := atomic.LoadInt32(&requests); got != 2 {
+		t.Fatalf("requests = %d, want the rejected one and its retry", got)
 	}
 }

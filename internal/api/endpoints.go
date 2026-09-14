@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"net/http"
 	"net/url"
 	"strconv"
 )
@@ -64,7 +63,7 @@ func (c *Client) Deployment(ctx context.Context, id, teamID string) (*Deployment
 // Events returns build log events for a deployment, oldest first.
 func (c *Client) Events(ctx context.Context, id, teamID string) ([]Event, error) {
 	q := url.Values{"limit": {"1000"}, "builds": {"1"}, "direction": {"forward"}}
-	body, err := c.do(ctx, http.MethodGet, c.baseURL+withQuery("/v2/deployments/"+id+"/events", scoped(q, teamID)), nil)
+	body, err := c.getRaw(ctx, "/v2/deployments/"+id+"/events", scoped(q, teamID))
 	if err != nil {
 		return nil, err
 	}
