@@ -380,3 +380,67 @@ func newTestModel() Model {
 	m.width, m.height = 80, 24
 	return m
 }
+
+// key builds the message a printable keypress produces.
+func key(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
+
+// Each view reads its own keys, so the dispatch has to land on the right one.
+func TestKeysReachTheirOwnView(t *testing.T) {
+	t.Run("deployments", func(t *testing.T) {
+		m := newTestModel()
+		m.deps = []api.Deployment{{UID: "d1", Name: "a"}, {UID: "d2", Name: "b"}}
+		model, _ := m.Update(key('j'))
+		if got := model.(Model); got.depCursor != 1 {
+			t.Fatalf("depCursor = %d, want 1", got.depCursor)
+		}
+	})
+
+	t.Run("actions", func(t *testing.T) {
+		m := newTestModel()
+		m.mode = modeActions
+		m.detail = &api.Deployment{UID: "d1", Name: "a", State: "READY"}
+		model, _ := m.Update(key('j'))
+		if got := model.(Model); got.actionCursor != 1 {
+			t.Fatalf("actionCursor = %d, want 1", got.actionCursor)
+		}
+	})
+
+	t.Run("envs", func(t *testing.T) {
+		m := newTestModel()
+		m.mode = modeEnvs
+		m.envs = []api.EnvVar{{ID: "e1", Key: "A"}, {ID: "e2", Key: "B"}}
+		model, _ := m.Update(key('j'))
+		if got := model.(Model); got.envCursor != 1 {
+			t.Fatalf("envCursor = %d, want 1", got.envCursor)
+		}
+	})
+
+	t.Run("logs", func(t *testing.T) {
+		m := newTestModel()
+		m.mode = modeLogs
+		m.detail = &api.Deployment{UID: "d1", Name: "a"}
+		m.logs = make([]string, 100)
+		model, _ := m.Update(key('k'))
+		if got := model.(Model); got.logScroll != 1 {
+			t.Fatalf("logScroll = %d, want 1", got.logScroll)
+		}
+	})
+}
+
+// Navigating onto a row whose detail is already cached must not ask for it
+// again, and must show the enriched detail straight away.
+func TestNavigationUsesCachedDetail(t *testing.T) {
+	m := newTestModel()
+	m.deps = []api.Deployment{{UID: "d1", Name: "web", State: "READY"}}
+	m.detailCache = map[string]api.Deployment{"d1": {UID: "d1", Project: api.Project{ID: "prj_1"}}}
+	m.domainCache = map[string][]string{"prj_1": {"example.com"}}
+
+	model, cmd := m.Update(key('j'))
+	got := model.(Model)
+	if cmd != nil {
+		t.Fatal("navigating onto a cached row issued a request")
+	}
+	if got.detail == nil || got.detail.Key() != "d1" {
+		t.Fatalf("detail = %+v, want the cached d1", got.detail)
+	}
+}

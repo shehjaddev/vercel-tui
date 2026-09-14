@@ -970,134 +970,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleKey routes a keypress. Modes that read text or run a dialog get the
+// key first; ctrl+c stays global so they can't trap the user.
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	m.err = "" // any keypress dismisses an action error
-	// ctrl+c quits from anywhere. Dialogs and text fields read keystrokes
-	// themselves, so without this they trap the user in a mode they can only
-	// leave with esc.
-	if key == "ctrl+c" {
+
+	switch {
+	case key == "ctrl+c":
 		return m, tea.Quit
-	}
-
-	if m.mode == modeLogin {
-		switch key {
-		case "esc":
-			return m, tea.Quit
-		case "enter":
-			if m.tokenBuf != "" {
-				m.loading = true
-				return m, validateToken(m.tokenBuf)
-			}
-		case "o":
-			// a shortcut only while the field is empty; otherwise it is a
-			// character like any other
-			if m.tokenBuf == "" {
-				return m, openBrowser("https://vercel.com/account/tokens")
-			}
-		case "q":
-			if m.tokenBuf == "" {
-				return m, tea.Quit
-			}
-		}
-		m.tokenBuf, _ = typeText(m.tokenBuf, msg)
-		return m, nil
-	}
-
-	if m.filterFocus {
-		switch key {
-		case "enter":
-			m.filter, m.filterFocus, m.depCursor = m.filterBuf, false, 0
-			return m, nil
-		case "esc":
-			m.filterBuf, m.filterFocus = "", false
-			return m, nil
-		}
-		m.filterBuf, _ = typeText(m.filterBuf, msg)
-		return m, nil
-	}
-
-	if m.pending != pendNone {
+	case m.mode == modeLogin:
+		return m.handleLoginKey(msg)
+	case m.filterFocus:
+		return m.handleFilterKey(msg)
+	case m.pending != pendNone:
 		return m.handleConfirm(msg)
-	}
-
-	if m.envForm {
-		switch key {
-		case "esc":
-			m = m.closeEnvForm()
-			return m, nil
-		case "tab":
-			if m.envEditID == "" {
-				m.envField = (m.envField + 1) % 2
-			}
-			return m, nil
-		case "t":
-			m.envPreset = m.nextEnvPreset()
-			return m, nil
-		case "enter":
-			switch {
-			case m.envField == 0 && m.envEditID == "":
-				if m.envKey != "" {
-					m.envField = 1
-				}
-			case m.envValue != "":
-				m.envForm = false
-				return m, m.submitEnv()
-			}
-			return m, nil
-		}
-		m.typeEnvForm(msg)
-		return m, nil
-	}
-
-	if m.searchFocus {
-		switch key {
-		case "enter":
-			m.search, m.searchFocus = m.searchBuf, false
-			m.lastMatch = max(m.logTopIndex()-1, -1)
-			m.searchNext()
-			return m, nil
-		case "esc":
-			m.searchBuf, m.searchFocus = "", false
-			return m, nil
-		}
-		m.searchBuf, _ = typeText(m.searchBuf, msg)
-		return m, nil
-	}
-
-	if m.help {
+	case m.envForm:
+		return m.handleEnvFormKey(msg)
+	case m.searchFocus:
+		return m.handleSearchKey(msg)
+	case m.help:
 		m.help = false
 		return m, nil
-	}
-
-	if m.teamSel {
-		switch key {
-		case "esc":
-			m.teamSel = false
-		case "j", "down":
-			if m.teamCursor < len(m.teams)-1 {
-				m.teamCursor++
-			}
-		case "k", "up":
-			if m.teamCursor > 0 {
-				m.teamCursor--
-			}
-		case "enter":
-			if m.teamCursor != m.teamIdx {
-				m.teamIdx = m.teamCursor
-				m.depCursor = 0
-				m.teamSel = false
-				if m.projectID != "" && m.teamID() != m.orgID {
-					m.projectID = ""
-					m.orgID = ""
-				}
-				m.rescope()
-				teamCmd := m.loadCurrent()
-				return m, teamCmd
-			}
-			m.teamSel = false
-		}
-		return m, nil
+	case m.teamSel:
+		return m.handleTeamKey(key)
 	}
 
 	switch key {
@@ -1105,14 +1001,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "?":
 		m.help = true
+		return m, nil
 	case "t":
 		if len(m.teams) > 1 {
 			m.teamSel, m.teamCursor = true, m.teamIdx
 		}
 		return m, nil
 	case "r":
-		refreshCmd := m.loadCurrent()
-		return m, refreshCmd
+		return m, m.loadCurrent()
 	case "/":
 		switch m.mode {
 		case modeDeployments:
@@ -1131,211 +1027,351 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch m.mode {
 	case modeDeployments:
-		rows := m.displayRows()
-		// fetchDetailCmd returns a command that enriches the selected row.
-		// refreshDetail reads the cache (populated by the batch fetch) so
-		// navigation is instant with no per-row requests.
-		refreshDetail := func() tea.Cmd {
-			d := m.selectedDep()
-			if d == nil {
-				return nil
-			}
-			_, cached := m.detailCache[d.Key()]
-			if cached {
-				c := m.detailCache[d.Key()]
-				m.detail = &c // cache hit: instant, no request
-			}
-			var cmds []tea.Cmd
-			if !cached {
-				cmds = append(cmds, m.fetchDetail(*d))
-			}
-			// domains for the selected project, fetched once per project
-			pid := ""
-			if m.detail != nil {
-				pid = m.detail.Project.ID
-			} else if cached, ok := m.detailCache[d.Key()]; ok {
-				pid = cached.Project.ID
-			}
-			if pid != "" {
-				if _, ok := m.domainCache[pid]; !ok {
-					cmds = append(cmds, m.fetchProjectDomains(pid))
-				}
-			}
-			if len(cmds) == 0 {
-				return nil
-			}
-			return tea.Batch(cmds...)
+		return m.handleDeploymentsKey(key)
+	case modeActions:
+		return m.handleActionsKey(key)
+	case modeEnvs:
+		return m.handleEnvsKey(key)
+	case modeLogs:
+		return m.handleLogsKey(key)
+	}
+	return m, nil
+}
+
+// projectIDFor is the project a deployment belongs to, when its enriched
+// detail is already cached. Only the detail response carries the project; the
+// list items leave it empty.
+func (m Model) projectIDFor(d api.Deployment) string {
+	cached, ok := m.detailCache[d.Key()]
+	if !ok {
+		return ""
+	}
+	return cached.Project.ID
+}
+
+// refreshDetail returns a command that enriches the selected row. It reads the
+// cache the batch fetch fills, so navigation is instant and only asks for what
+// is missing.
+func (m *Model) refreshDetail() tea.Cmd {
+	d := m.selectedDep()
+	if d == nil {
+		return nil
+	}
+	if cached, ok := m.detailCache[d.Key()]; ok {
+		m.detail = &cached // cache hit: instant, no request
+	}
+	var cmds []tea.Cmd
+	if _, ok := m.detailCache[d.Key()]; !ok {
+		cmds = append(cmds, m.fetchDetail(*d))
+	}
+	// domains for the selected project, fetched once per project
+	if pid := m.projectIDFor(*d); pid != "" {
+		if _, ok := m.domainCache[pid]; !ok {
+			cmds = append(cmds, m.fetchProjectDomains(pid))
 		}
-		switch key {
-		case "j", "down":
-			m.depCursor = clamp(m.depCursor+1, 0, len(rows)-1)
-			return m, refreshDetail()
-		case "k", "up":
-			m.depCursor = clamp(m.depCursor-1, 0, len(rows)-1)
-			return m, refreshDetail()
-		case "g", "home":
-			m.depCursor = 0
-			return m, refreshDetail()
-		case "G", "end":
-			m.depCursor = len(rows) - 1
-			return m, refreshDetail()
-		case "enter":
-			if d := m.selectedDep(); d != nil {
-				if m.detail == nil || m.detail.Key() != d.Key() {
-					m.detail = d
-				}
-				m.mode = modeActions
-				m.actionCursor = 0
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
+}
+
+// moveCursor moves the list cursor for a navigation key.
+func (m *Model) moveCursor(key string, rows int) {
+	switch key {
+	case "j", "down":
+		m.depCursor = clamp(m.depCursor+1, 0, rows-1)
+	case "k", "up":
+		m.depCursor = clamp(m.depCursor-1, 0, rows-1)
+	case "g", "home":
+		m.depCursor = 0
+	case "G", "end":
+		m.depCursor = rows - 1
+	}
+}
+
+// handleLoginKey reads the token the user pastes or types.
+func (m Model) handleLoginKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		return m, tea.Quit
+	case "enter":
+		if m.tokenBuf != "" {
+			m.loading = true
+			return m, validateToken(m.tokenBuf)
+		}
+	case "o":
+		// a shortcut only while the field is empty; otherwise it is a
+		// character like any other
+		if m.tokenBuf == "" {
+			return m, openBrowser("https://vercel.com/account/tokens")
+		}
+	case "q":
+		if m.tokenBuf == "" {
+			return m, tea.Quit
+		}
+	}
+	m.tokenBuf, _ = typeText(m.tokenBuf, msg)
+	return m, nil
+}
+
+// handleFilterKey edits the list filter.
+func (m Model) handleFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		m.filter, m.filterFocus, m.depCursor = m.filterBuf, false, 0
+		return m, nil
+	case "esc":
+		m.filterBuf, m.filterFocus = "", false
+		return m, nil
+	}
+	m.filterBuf, _ = typeText(m.filterBuf, msg)
+	return m, nil
+}
+
+// handleEnvFormKey edits the environment variable form.
+func (m Model) handleEnvFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m = m.closeEnvForm()
+		return m, nil
+	case "tab":
+		if m.envEditID == "" {
+			m.envField = (m.envField + 1) % 2
+		}
+		return m, nil
+	case "t":
+		m.envPreset = m.nextEnvPreset()
+		return m, nil
+	case "enter":
+		switch {
+		case m.envField == keyField && m.envEditID == "":
+			if m.envKey != "" {
+				m.envField = valueField
 			}
+		case m.envValue != "":
+			m.envForm = false
+			return m, m.submitEnv()
+		}
+		return m, nil
+	}
+	m.typeEnvForm(msg)
+	return m, nil
+}
+
+// handleSearchKey edits the log search term.
+func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		m.search, m.searchFocus = m.searchBuf, false
+		m.lastMatch = max(m.logTopIndex()-1, -1)
+		m.searchNext()
+		return m, nil
+	case "esc":
+		m.searchBuf, m.searchFocus = "", false
+		return m, nil
+	}
+	m.searchBuf, _ = typeText(m.searchBuf, msg)
+	return m, nil
+}
+
+// handleTeamKey drives the team picker. Switching to another team drops a
+// project scope that belonged to the old one, then reloads in the new scope.
+func (m Model) handleTeamKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc":
+		m.teamSel = false
+	case "j", "down":
+		if m.teamCursor < len(m.teams)-1 {
+			m.teamCursor++
+		}
+	case "k", "up":
+		if m.teamCursor > 0 {
+			m.teamCursor--
+		}
+	case "enter":
+		if m.teamCursor == m.teamIdx {
+			m.teamSel = false
 			return m, nil
-		case "e":
-			if d := m.selectedDep(); d != nil {
-				pid := ""
-				if cached, ok := m.detailCache[d.Key()]; ok {
-					pid = cached.Project.ID
-				}
-				if pid == "" {
-					return m, nil
-				}
-				m.envProject = api.Project{Name: d.Name, ID: pid}
-				m.mode = modeEnvs
-				m.envCursor = 0
-				envsCmd := m.fetchEnvs()
-				return m, envsCmd
+		}
+		m.teamIdx = m.teamCursor
+		m.depCursor = 0
+		m.teamSel = false
+		if m.projectID != "" && m.teamID() != m.orgID {
+			m.projectID = ""
+			m.orgID = ""
+		}
+		m.rescope()
+		return m, m.loadCurrent()
+	}
+	return m, nil
+}
+
+// handleDeploymentsKey drives the deployment list.
+func (m Model) handleDeploymentsKey(key string) (tea.Model, tea.Cmd) {
+	rows := m.displayRows()
+	switch key {
+	case "j", "down", "k", "up", "g", "home", "G", "end":
+		m.moveCursor(key, len(rows))
+		cmd := m.refreshDetail()
+		return m, cmd
+	case "enter":
+		if d := m.selectedDep(); d != nil {
+			if m.detail == nil || m.detail.Key() != d.Key() {
+				m.detail = d
 			}
-		case "E":
-			if m.depCursor < len(rows) && rows[m.depCursor].project != "" {
-				if m.expanded == rows[m.depCursor].project {
-					m.expanded = ""
-				} else {
-					m.expanded = rows[m.depCursor].project
-				}
+			m.mode = modeActions
+			m.actionCursor = 0
+		}
+	case "e":
+		if d := m.selectedDep(); d != nil {
+			pid := m.projectIDFor(*d)
+			if pid == "" {
 				return m, nil
 			}
-		case "L":
-			if d := m.selectedDep(); d != nil {
-				pid := ""
-				if cached, ok := m.detailCache[d.Key()]; ok {
-					pid = cached.Project.ID
-				}
-				if pid == "" {
-					return m, nil
-				}
-				p := api.Project{Name: d.Name, ID: pid}
-				org := m.teamID()
-				return m, func() tea.Msg {
-					err := config.WriteProjectLink(m.dir, p.ID, org)
-					return actionMsg{text: "linked " + p.Name + " (" + filepath.Join(m.dir, ".vercel/project.json") + ")", err: err}
-				}
-			}
-		case "a":
-			m.grouped = !m.grouped
-			m.depCursor = 0
-			m.expanded = ""
-		case "U":
-			if m.projectID != "" {
-				return m.unlinkCmd()
-			}
-		case "x":
-			if d := m.selectedDep(); d != nil && d.Status() == "building" {
-				m.pending, m.pendingDep, m.confirmInput = pendCancel, *d, ""
-			}
-		case "D":
-			if d := m.selectedDep(); d != nil {
-				m.pending, m.pendingDep, m.confirmInput = pendDelete, *d, ""
-			}
-		case "R":
-			if d := m.selectedDep(); d != nil {
-				m.pending, m.pendingDep, m.confirmInput = pendRedeploy, *d, ""
-			}
-		case "B":
-			if d := m.selectedDep(); d != nil && d.Status() == "ready" && d.Target == "production" {
-				m.pending, m.pendingDep, m.confirmInput = pendRollback, *d, ""
-			}
-		case "l":
-			if d := m.selectedDep(); d != nil {
-				m.detail = d
-				m.logs, m.logScroll = nil, 0
-				m.mode = modeLogs
-				logsCmd := m.fetchLogs()
-				return m, logsCmd
-			}
-		case "o":
-			if d := m.selectedDep(); d != nil {
-				return m, openBrowser("https://" + d.URL)
-			}
-		case "c":
-			if d := m.selectedDep(); d != nil {
-				return m, copyURL("https://" + d.URL)
+			m.envProject = api.Project{Name: d.Name, ID: pid}
+			m.mode = modeEnvs
+			m.envCursor = 0
+			return m, m.fetchEnvs()
+		}
+	case "E":
+		if m.depCursor < len(rows) && rows[m.depCursor].project != "" {
+			if m.expanded == rows[m.depCursor].project {
+				m.expanded = ""
+			} else {
+				m.expanded = rows[m.depCursor].project
 			}
 		}
-
-	case modeActions:
-		if m.detail == nil {
-			m.mode = modeDeployments
+	case "L":
+		if d := m.selectedDep(); d != nil {
+			pid := m.projectIDFor(*d)
+			if pid == "" {
+				return m, nil
+			}
+			p := api.Project{Name: d.Name, ID: pid}
+			org := m.teamID()
+			return m, func() tea.Msg {
+				err := config.WriteProjectLink(m.dir, p.ID, org)
+				return actionMsg{text: "linked " + p.Name + " (" + filepath.Join(m.dir, ".vercel/project.json") + ")", err: err}
+			}
+		}
+	case "a":
+		m.grouped = !m.grouped
+		m.depCursor = 0
+		m.expanded = ""
+	case "U":
+		if m.projectID == "" {
 			return m, nil
 		}
-		actions := m.deploymentActions()
-		switch key {
-		case "esc":
-			m.mode = modeDeployments
-		case "j", "down":
-			m.actionCursor = clamp(m.actionCursor+1, 0, len(actions)-1)
-		case "k", "up":
-			m.actionCursor = clamp(m.actionCursor-1, 0, len(actions)-1)
-		case "g", "home":
-			m.actionCursor = 0
-		case "G", "end":
-			m.actionCursor = len(actions) - 1
-		case "enter":
-			if m.actionCursor < len(actions) {
-				return m.runActionByKey(actions[m.actionCursor].key)
-			}
+		return m.unlinkCmd()
+	case "x":
+		if d := m.selectedDep(); d != nil && d.Status() == "building" {
+			m.pending, m.pendingDep, m.confirmInput = pendCancel, *d, ""
 		}
-
-	case modeEnvs:
-		switch key {
-		case "esc":
-			m.mode = modeDeployments
-		case "j", "down":
-			m.envCursor = clamp(m.envCursor+1, 0, len(m.envs)-1)
-		case "k", "up":
-			m.envCursor = clamp(m.envCursor-1, 0, len(m.envs)-1)
-		case "n":
-			m = m.newEnvForm()
-		case "e":
-			if m.envCursor < len(m.envs) {
-				m = m.editEnvForm(m.envs[m.envCursor])
-			}
-		case "d":
-			if m.envCursor < len(m.envs) {
-				m.pending, m.pendingEnv, m.confirmInput = pendDeleteEnv, m.envs[m.envCursor], ""
-			}
+	case "D":
+		if d := m.selectedDep(); d != nil {
+			m.pending, m.pendingDep, m.confirmInput = pendDelete, *d, ""
 		}
+	case "R":
+		if d := m.selectedDep(); d != nil {
+			m.pending, m.pendingDep, m.confirmInput = pendRedeploy, *d, ""
+		}
+	case "B":
+		if d := m.selectedDep(); d != nil && d.Status() == "ready" && d.Target == "production" {
+			m.pending, m.pendingDep, m.confirmInput = pendRollback, *d, ""
+		}
+	case "l":
+		if d := m.selectedDep(); d != nil {
+			m.detail = d
+			m.logs, m.logScroll = nil, 0
+			m.mode = modeLogs
+			cmd := m.fetchLogs()
+			return m, cmd
+		}
+	case "o":
+		if d := m.selectedDep(); d != nil {
+			return m, openBrowser("https://" + d.URL)
+		}
+	case "c":
+		if d := m.selectedDep(); d != nil {
+			return m, copyURL("https://" + d.URL)
+		}
+	}
+	return m, nil
+}
 
-	case modeLogs:
-		maxScroll := m.logMaxScroll()
-		switch key {
-		case "esc":
-			m.mode = modeDeployments
-		case "j", "down":
-			m.logScroll = clamp(m.logScroll-1, 0, maxScroll)
-		case "k", "up":
-			m.logScroll = clamp(m.logScroll+1, 0, maxScroll)
-		case "pgdown":
-			m.logScroll = clamp(m.logScroll-(m.height/2), 0, maxScroll)
-		case "pgup":
-			m.logScroll = clamp(m.logScroll+(m.height/2), 0, maxScroll)
-		case "G", "end":
-			m.logScroll = 0
-		case "g", "home":
-			m.logScroll = maxScroll
-		case "n":
-			m.searchNext()
-		case "c":
-			if m.detail != nil {
-				return m, copyURL("https://" + m.detail.URL)
-			}
+// handleActionsKey drives the deployment actions menu.
+func (m Model) handleActionsKey(key string) (tea.Model, tea.Cmd) {
+	if m.detail == nil {
+		m.mode = modeDeployments
+		return m, nil
+	}
+	actions := m.deploymentActions()
+	switch key {
+	case "esc":
+		m.mode = modeDeployments
+	case "j", "down":
+		m.actionCursor = clamp(m.actionCursor+1, 0, len(actions)-1)
+	case "k", "up":
+		m.actionCursor = clamp(m.actionCursor-1, 0, len(actions)-1)
+	case "g", "home":
+		m.actionCursor = 0
+	case "G", "end":
+		m.actionCursor = len(actions) - 1
+	case "enter":
+		if m.actionCursor < len(actions) {
+			return m.runActionByKey(actions[m.actionCursor].key)
+		}
+	}
+	return m, nil
+}
+
+// handleEnvsKey drives the environment variable list.
+func (m Model) handleEnvsKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc":
+		m.mode = modeDeployments
+	case "j", "down":
+		m.envCursor = clamp(m.envCursor+1, 0, len(m.envs)-1)
+	case "k", "up":
+		m.envCursor = clamp(m.envCursor-1, 0, len(m.envs)-1)
+	case "n":
+		m = m.newEnvForm()
+	case "e":
+		if m.envCursor < len(m.envs) {
+			m = m.editEnvForm(m.envs[m.envCursor])
+		}
+	case "d":
+		if m.envCursor < len(m.envs) {
+			m.pending, m.pendingEnv, m.confirmInput = pendDeleteEnv, m.envs[m.envCursor], ""
+		}
+	}
+	return m, nil
+}
+
+// handleLogsKey drives the log view.
+func (m Model) handleLogsKey(key string) (tea.Model, tea.Cmd) {
+	maxScroll := m.logMaxScroll()
+	switch key {
+	case "esc":
+		m.mode = modeDeployments
+	case "j", "down":
+		m.logScroll = clamp(m.logScroll-1, 0, maxScroll)
+	case "k", "up":
+		m.logScroll = clamp(m.logScroll+1, 0, maxScroll)
+	case "pgdown":
+		m.logScroll = clamp(m.logScroll-(m.height/2), 0, maxScroll)
+	case "pgup":
+		m.logScroll = clamp(m.logScroll+(m.height/2), 0, maxScroll)
+	case "G", "end":
+		m.logScroll = 0
+	case "g", "home":
+		m.logScroll = maxScroll
+	case "n":
+		m.searchNext()
+	case "c":
+		if m.detail != nil {
+			return m, copyURL("https://" + m.detail.URL)
 		}
 	}
 	return m, nil
