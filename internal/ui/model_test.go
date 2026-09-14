@@ -539,9 +539,9 @@ func columnOffset(line, cell string) int {
 	return lipgloss.Width(line[:i])
 }
 
-// The board has no marker column: it starts at the left edge and every row
-// lays its cells out where the header puts them. The row under the cursor is
-// the one wearing the highlight.
+// The board has no marker column: the cursor row lines up with the header at
+// the left edge, the rows around it sit one cell in, and the row under the
+// cursor is the one wearing the highlight.
 func TestBoardColumnsLineUp(t *testing.T) {
 	m := newTestModel()
 	m.width, m.height = 120, 40
@@ -594,14 +594,23 @@ func TestBoardColumnsLineUp(t *testing.T) {
 		if strings.Contains(line, "❯") {
 			t.Errorf("board row carries a marker: %q", line)
 		}
+		// row 1 is the row the cursor is on: it is level with the header, and
+		// every row after it is one cell in
+		want := map[string]int{}
+		for col, start := range starts {
+			want[col] = start
+			if rows > 1 {
+				want[col] = start + 1
+			}
+		}
 		for col, values := range cells {
 			for _, v := range values {
 				i := strings.Index(line, v)
 				if i < 0 {
 					continue
 				}
-				if got := lipgloss.Width(line[:i]); got != starts[col] {
-					t.Errorf("%s %q starts at %d, but the %s column starts at %d: %q", col, v, got, col, starts[col], line)
+				if got := lipgloss.Width(line[:i]); got != want[col] {
+					t.Errorf("%s %q starts at %d, want %d (the %s column is at %d): %q", col, v, got, want[col], col, starts[col], line)
 				}
 			}
 		}

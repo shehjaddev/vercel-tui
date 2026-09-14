@@ -195,6 +195,10 @@ func (m Model) deploymentsView() string {
 		line := row(widths, cells...)
 		if sel {
 			line = selectedStyle.Render(line)
+		} else {
+			// the rows around the cursor sit one cell in, so the cursor row —
+			// level with the header — reads as the one you are on
+			line = boardIndent + line
 		}
 		body = append(body, line)
 	}
@@ -557,6 +561,10 @@ func pad(s string, w int) string {
 
 // childIndent sets an expanded project's deployments in from the header.
 const childIndent = "  "
+
+// boardIndent sets the rows that are not under the cursor in from the edge. The
+// cursor row lines up with the header; every other row sits one cell in.
+const boardIndent = " "
 
 // markerGap separates a row's marker from its first character.
 const markerGap = " "
