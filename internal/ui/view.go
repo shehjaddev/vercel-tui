@@ -107,10 +107,6 @@ func (m Model) deploymentsView() string {
 
 	// --- list ---
 	widths := m.boardWidths()
-	byName := make(map[string]projectGroup)
-	for _, g := range m.projectGroups() {
-		byName[g.name] = g
-	}
 	var body []string
 	body = append(body, headerStyle.Render(row(widths, "", "PROJECT", "STATE", "BRANCH", "COMMIT", "AGE", "ACTIVITY")))
 	maxRows := max(m.height-9, 1)
@@ -119,13 +115,11 @@ func (m Model) deploymentsView() string {
 		r := rows[i]
 		sel := i == m.depCursor
 		var cells []string
-		if r.project != "" {
-			var latest *api.Deployment
-			if g, ok := byName[r.project]; ok && len(g.deployments) > 0 {
-				latest = &g.deployments[0]
-			}
-			cells = m.boardHeadCells(r.project, latest, widths, m.expanded == r.project, sel)
-		} else if r.dep != nil {
+		switch {
+		case r.project != "":
+			// a head row carries its latest deployment as the summary
+			cells = m.boardHeadCells(r.project, r.dep, widths, m.expanded == r.project, sel)
+		case r.dep != nil:
 			cells = m.boardChildCells(*r.dep, widths, sel)
 		}
 		line := row(widths, cells...)

@@ -1444,37 +1444,27 @@ func (m Model) displayRows() []displayRow {
 		return rows
 	}
 	// group by project, preserving newest-first order of first appearance
-	var order []string
-	byProj := map[string][]api.Deployment{}
-	for _, d := range deps {
-		if byProj[d.Name] == nil {
-			order = append(order, d.Name)
-		}
-		byProj[d.Name] = append(byProj[d.Name], d)
-	}
 	var rows []displayRow
-	for _, name := range order {
-		list := byProj[name]
-		rows = append(rows, displayRow{project: name, count: len(list), dep: &list[0]})
-		if name == m.expanded {
-			for i := range list {
-				rows = append(rows, displayRow{dep: &list[i], indent: true, last: i == len(list)-1})
+	for _, g := range groupByProject(deps) {
+		rows = append(rows, displayRow{project: g.name, count: len(g.deployments), dep: &g.deployments[0]})
+		if g.name == m.expanded {
+			for i := range g.deployments {
+				rows = append(rows, displayRow{dep: &g.deployments[i], indent: true, last: i == len(g.deployments)-1})
 			}
 		}
 	}
 	return rows
 }
 
-// projectGroups returns visible deployments grouped by project, newest
-// group first (matching display order). Each group keeps its deployments
-// newest-first.
+// projectGroup is one project and its deployments, newest first.
 type projectGroup struct {
 	name        string
 	deployments []api.Deployment
 }
 
-func (m Model) projectGroups() []projectGroup {
-	deps := m.visibleDeps()
+// groupByProject groups deployments by project, newest group first (matching
+// display order). Each group keeps its deployments newest-first.
+func groupByProject(deps []api.Deployment) []projectGroup {
 	var order []string
 	byProj := map[string][]api.Deployment{}
 	for _, d := range deps {
@@ -1489,6 +1479,9 @@ func (m Model) projectGroups() []projectGroup {
 	}
 	return groups
 }
+
+// projectGroups returns the visible deployments, grouped.
+func (m Model) projectGroups() []projectGroup { return groupByProject(m.visibleDeps()) }
 
 // selectedDep returns the deployment at the cursor. Project head rows
 // carry their latest deployment, so this is nil only off-list.

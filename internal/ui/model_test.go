@@ -493,3 +493,42 @@ func TestUnavailableActionAsksNothing(t *testing.T) {
 		}
 	}
 }
+
+// Grouped, the list shows one head per project carrying that project's latest
+// deployment, with the expanded project's deployments underneath it.
+func TestDisplayRowsGrouping(t *testing.T) {
+	m := newTestModel()
+	m.deps = []api.Deployment{
+		{UID: "a1", Name: "alpha", State: "READY"},
+		{UID: "b1", Name: "beta", State: "READY"},
+		{UID: "a2", Name: "alpha", State: "BUILDING"},
+	}
+
+	rows := m.displayRows()
+	if len(rows) != 2 {
+		t.Fatalf("grouped rows = %d, want one head per project (2)", len(rows))
+	}
+	if rows[0].project != "alpha" || rows[0].count != 2 || rows[0].dep.Key() != "a1" {
+		t.Fatalf("first head = %+v (dep %+v), want alpha's latest (a1)", rows[0], rows[0].dep)
+	}
+	if rows[1].project != "beta" || rows[1].dep.Key() != "b1" {
+		t.Fatalf("second head = %+v, want beta", rows[1])
+	}
+
+	m.expanded = "alpha"
+	rows = m.displayRows()
+	if len(rows) != 4 {
+		t.Fatalf("expanded rows = %d, want head, two children and the other head (4)", len(rows))
+	}
+	if rows[1].dep.Key() != "a1" || !rows[1].indent || rows[1].last {
+		t.Fatalf("first child = %+v, want a1 indented and not last", rows[1])
+	}
+	if rows[2].dep.Key() != "a2" || !rows[2].last {
+		t.Fatalf("last child = %+v, want a2 marked last", rows[2])
+	}
+
+	m.grouped = false
+	if rows = m.displayRows(); len(rows) != 3 {
+		t.Fatalf("flat rows = %d, want every deployment (3)", len(rows))
+	}
+}
