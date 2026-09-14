@@ -15,6 +15,7 @@ var (
 	selectedStyle = lipgloss.NewStyle().Bold(true).Background(lipgloss.Color("238"))
 	headerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	valueStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("231"))
 	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	okStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
@@ -136,7 +137,7 @@ func (m Model) statusBar() string {
 	} else if m.loading {
 		right = dimStyle.Render("refreshing…")
 	} else if !m.lastLoad.IsZero() {
-		right = dimStyle.Render("updated " + rel(time.Now().Sub(m.lastLoad)))
+		right = dimStyle.Render("updated " + rel(time.Since(m.lastLoad)))
 	}
 	gap := max(m.width-lipgloss.Width(line)-lipgloss.Width(right), 1)
 	return line + strings.Repeat(" ", gap) + right
@@ -180,67 +181,54 @@ func (m Model) deploymentsView() string {
 	return detail + m.topDetailSeparator() + list
 }
 
-// topDetail is a pinned 2-3 line block showing the selected deployment.
+// topDetail is the pinned block above the list: what the selected deployment
+// is, what it was built from, and where it was published.
 func (m Model) topDetail() string {
 	d := m.selectedDep()
 	if d == nil {
 		return ""
 	}
-	// prefer the cached enriched detail (aliases etc.) for this selection
-	if m.detailCache != nil {
-		if cached, ok := m.detailCache[d.Key()]; ok {
-			d = &cached
-		}
+	// prefer the cached enriched detail for this selection
+	if cached, ok := m.detailCache[d.Key()]; ok {
+		d = &cached
 	}
 
-	val := func(s string) string {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Render(s)
-	}
-
-	// line 1: project · state · branch · commit · target · repo
-	line1 := []string{
+	head := []string{
 		titleStyle.Render(d.Name),
 		stateStyle[d.Status()].Render(strings.ToUpper(d.Status())),
-		val(d.Branch()),
-		val(d.ShortSHA()),
-		val(targetLabel(d.Target)),
+		valueStyle.Render(d.Branch()),
+		valueStyle.Render(d.ShortSHA()),
+		valueStyle.Render(targetLabel(d.Target)),
 	}
 	if r := d.Repo(); r != "" {
-		line1 = append(line1, val(r))
+		head = append(head, valueStyle.Render(r))
 	}
+	lines := []string{strings.Join(head, "  ")}
 
-	// line 2: commit message (single line, collapse embedded newlines)
-	line2 := ""
 	if msg := d.Message(); msg != "" {
-		msg = strings.ReplaceAll(msg, "\n", " ")
-		line2 = dimStyle.Render("commit") + " " + val(trunc(msg, max(m.width-12, 24))) + "\n"
+		// one line only: an embedded newline would break the block apart
+		lines = append(lines, dimStyle.Render("commit")+" "+
+			valueStyle.Render(trunc(strings.ReplaceAll(msg, "\n", " "), max(m.width-12, 24))))
 	}
 
-	// line 3: author · created · ready · duration
-	meta := []string{
-		val(d.Creator.Username),
-		val(absTime(d.CreatedMs())),
-	}
+	meta := []string{valueStyle.Render(d.Creator.Username), valueStyle.Render(absTime(d.CreatedMs()))}
 	if t := d.ReadyMs(); t > 0 {
-		meta = append(meta, val(absTime(t)+" · "+duration(d.Duration())))
+		meta = append(meta, valueStyle.Render(absTime(t)+" · "+duration(d.Duration())))
 	}
-	line3 := dimStyle.Render("by") + " " + strings.Join(meta, "   ")
+	lines = append(lines, dimStyle.Render("by")+" "+strings.Join(meta, "   "))
 
-	// line 4: url (readable, untruncated when it fits)
-	line4 := ""
 	if d.URL != "" {
-		line4 = dimStyle.Render("url") + " " + val(trunc("https://"+d.URL, max(m.width-8, 30))) + "\n"
+		lines = append(lines, dimStyle.Render("url")+" "+
+			valueStyle.Render(trunc("https://"+d.URL, max(m.width-8, 30))))
 	}
 
-	// line 5: domains bound to this project (fetched on selection)
-	line5 := ""
-	if d.Project.ID != "" {
-		if names, ok := m.domainCache[d.Project.ID]; ok && len(names) > 0 {
-			line5 = dimStyle.Render("domains") + " " + val(trunc(strings.Join(names, ", "), max(m.width-8, 30))) + "\n"
-		}
+	// domains are cached per project once the detail fetch has landed
+	if names := m.domainCache[d.Project.ID]; len(names) > 0 {
+		lines = append(lines, dimStyle.Render("domains")+" "+
+			valueStyle.Render(trunc(strings.Join(names, ", "), max(m.width-8, 30))))
 	}
 
-	return strings.Join(line1, "  ") + "\n" + line2 + line3 + "\n" + line4 + line5
+	return strings.Join(lines, "\n")
 }
 
 // topDetailSeparator renders the gap + divider between the detail block
