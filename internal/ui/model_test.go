@@ -335,3 +335,48 @@ func TestCtrlCQuitsFromEveryInputMode(t *testing.T) {
 		}
 	}
 }
+
+// Every text field goes through the same editor; each one still has to take
+// the keystrokes the user types and give back the last rune on backspace.
+func TestTypedInputReachesEveryField(t *testing.T) {
+	fields := []struct {
+		name  string
+		build func() Model
+		read  func(Model) string
+	}{
+		{"login", func() Model { return New(api.New("tok"), false, 0, nil, "", "", ".") },
+			func(m Model) string { return m.tokenBuf }},
+		{"list filter", func() Model { m := newTestModel(); m.filterFocus = true; return m },
+			func(m Model) string { return m.filterBuf }},
+		{"log search", func() Model { m := newTestModel(); m.searchFocus = true; return m },
+			func(m Model) string { return m.searchBuf }},
+		{"delete confirm", func() Model { m := newTestModel(); m.pending = pendDelete; return m },
+			func(m Model) string { return m.confirmInput }},
+		{"env form", func() Model { return newTestModel().newEnvForm() },
+			func(m Model) string { return m.envKey }},
+	}
+
+	for _, f := range fields {
+		m := f.build()
+		for _, r := range "ab" {
+			model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = model.(Model)
+		}
+		if got := f.read(m); got != "ab" {
+			t.Errorf("%s: buffer = %q after typing \"ab\", want \"ab\"", f.name, got)
+		}
+		model, _ := m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+		m = model.(Model)
+		if got := f.read(m); got != "a" {
+			t.Errorf("%s: buffer = %q after backspace, want \"a\"", f.name, got)
+		}
+	}
+}
+
+// newTestModel is a model wired to a throwaway client, sized so the list and
+// log views have room to lay out.
+func newTestModel() Model {
+	m := New(api.New("tok"), true, 0, nil, "", "", ".")
+	m.width, m.height = 80, 24
+	return m
+}

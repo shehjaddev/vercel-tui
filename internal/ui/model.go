@@ -421,6 +421,44 @@ func (m *Model) fetchEnvs() tea.Cmd {
 	}
 }
 
+// keyField and valueField index the env form's two text fields.
+const (
+	keyField = iota
+	valueField
+)
+
+// typeEnvForm routes a keystroke to the form field being edited: the key while
+// it is being typed, the value once the key is set or an existing var is being
+// edited. It needs a pointer receiver — the form state lives in the model the
+// key handler returns, not in a copy of it.
+func (m *Model) typeEnvForm(msg tea.KeyMsg) {
+	if m.envField == valueField || m.envEditID != "" {
+		m.envValue, _ = typeText(m.envValue, msg)
+		return
+	}
+	m.envKey, _ = typeText(m.envKey, msg)
+}
+
+// newEnvForm opens an empty form for a new variable.
+func (m Model) newEnvForm() Model {
+	m.envForm, m.envKey, m.envValue, m.envField, m.envPreset, m.envEditID = true, "", "", keyField, 0, ""
+	return m
+}
+
+// editEnvForm opens the form on an existing variable. Editing starts on "keep
+// the stored targets" (-1): changing a value leaves the targets alone unless
+// the user cycles to one.
+func (m Model) editEnvForm(v api.EnvVar) Model {
+	m.envForm, m.envKey, m.envValue, m.envField, m.envPreset, m.envEditID = true, v.Key, "", valueField, -1, v.ID
+	return m
+}
+
+// closeEnvForm discards the form.
+func (m Model) closeEnvForm() Model {
+	m.envForm, m.envKey, m.envValue, m.envField, m.envPreset, m.envEditID = false, "", "", keyField, 0, ""
+	return m
+}
+
 // nextEnvPreset advances the target choice in the env form. While editing,
 // cycling past the last preset wraps back to keeping the stored targets.
 func (m Model) nextEnvPreset() int {
@@ -540,16 +578,29 @@ func copyURL(url string) tea.Cmd {
 	}
 }
 
+// typeText applies one keystroke to a text buffer: backspace drops the last
+// rune, printable runes append, and anything else is not text (ok is false),
+// so the caller can fall through to its own key handling.
+func typeText(buf string, msg tea.KeyMsg) (string, bool) {
+	switch msg.String() {
+	case "backspace":
+		if r := []rune(buf); len(r) > 0 {
+			return string(r[:len(r)-1]), true
+		}
+		return buf, true
+	}
+	if msg.Type == tea.KeyRunes {
+		return buf + string(msg.Runes), true
+	}
+	return buf, false
+}
+
 // handleConfirm runs the typed-confirmation dialog for destructive actions.
 func (m Model) handleConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		m.pending = pendNone
 		m.confirmInput = ""
-	case "backspace":
-		if r := []rune(m.confirmInput); len(r) > 0 {
-			m.confirmInput = string(r[:len(r)-1])
-		}
 	case "enter":
 		pa := m.pending
 		required := ""
@@ -568,9 +619,7 @@ func (m Model) handleConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.runAction(pa, m.pendingDep)
 	default:
-		if msg.Type == tea.KeyRunes {
-			m.confirmInput += string(msg.Runes)
-		}
+		m.confirmInput, _ = typeText(m.confirmInput, msg)
 	}
 	return m, nil
 }
@@ -941,24 +990,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, validateToken(m.tokenBuf)
 			}
 		case "o":
+			// a shortcut only while the field is empty; otherwise it is a
+			// character like any other
 			if m.tokenBuf == "" {
 				return m, openBrowser("https://vercel.com/account/tokens")
 			}
-			m.tokenBuf += key
 		case "q":
 			if m.tokenBuf == "" {
 				return m, tea.Quit
 			}
-			m.tokenBuf += key
-		case "backspace":
-			if r := []rune(m.tokenBuf); len(r) > 0 {
-				m.tokenBuf = string(r[:len(r)-1])
-			}
-		default:
-			if msg.Type == tea.KeyRunes {
-				m.tokenBuf += string(msg.Runes)
-			}
 		}
+		m.tokenBuf, _ = typeText(m.tokenBuf, msg)
 		return m, nil
 	}
 
@@ -966,17 +1008,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch key {
 		case "enter":
 			m.filter, m.filterFocus, m.depCursor = m.filterBuf, false, 0
+			return m, nil
 		case "esc":
 			m.filterBuf, m.filterFocus = "", false
-		case "backspace":
-			if r := []rune(m.filterBuf); len(r) > 0 {
-				m.filterBuf = string(r[:len(r)-1])
-			}
-		default:
-			if msg.Type == tea.KeyRunes {
-				m.filterBuf += string(msg.Runes)
-			}
+			return m, nil
 		}
+		m.filterBuf, _ = typeText(m.filterBuf, msg)
 		return m, nil
 	}
 
@@ -987,39 +1024,29 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.envForm {
 		switch key {
 		case "esc":
-			m.envForm, m.envKey, m.envValue, m.envField, m.envEditID = false, "", "", 0, ""
+			m = m.closeEnvForm()
+			return m, nil
 		case "tab":
 			if m.envEditID == "" {
 				m.envField = (m.envField + 1) % 2
 			}
+			return m, nil
 		case "t":
 			m.envPreset = m.nextEnvPreset()
+			return m, nil
 		case "enter":
-			if m.envField == 0 && m.envEditID == "" {
+			switch {
+			case m.envField == 0 && m.envEditID == "":
 				if m.envKey != "" {
 					m.envField = 1
 				}
-			} else if m.envValue != "" {
+			case m.envValue != "":
 				m.envForm = false
 				return m, m.submitEnv()
 			}
-		case "backspace":
-			buf := &m.envKey
-			if m.envField == 1 || m.envEditID != "" {
-				buf = &m.envValue
-			}
-			if r := []rune(*buf); len(r) > 0 {
-				*buf = string(r[:len(r)-1])
-			}
-		default:
-			if msg.Type == tea.KeyRunes {
-				if m.envField == 0 && m.envEditID == "" {
-					m.envKey += string(msg.Runes)
-				} else {
-					m.envValue += string(msg.Runes)
-				}
-			}
+			return m, nil
 		}
+		m.typeEnvForm(msg)
 		return m, nil
 	}
 
@@ -1029,17 +1056,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.search, m.searchFocus = m.searchBuf, false
 			m.lastMatch = max(m.logTopIndex()-1, -1)
 			m.searchNext()
+			return m, nil
 		case "esc":
 			m.searchBuf, m.searchFocus = "", false
-		case "backspace":
-			if r := []rune(m.searchBuf); len(r) > 0 {
-				m.searchBuf = string(r[:len(r)-1])
-			}
-		default:
-			if msg.Type == tea.KeyRunes {
-				m.searchBuf += string(msg.Runes)
-			}
+			return m, nil
 		}
+		m.searchBuf, _ = typeText(m.searchBuf, msg)
 		return m, nil
 	}
 
@@ -1280,14 +1302,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "k", "up":
 			m.envCursor = clamp(m.envCursor-1, 0, len(m.envs)-1)
 		case "n":
-			m.envForm, m.envKey, m.envValue, m.envField, m.envPreset, m.envEditID = true, "", "", 0, 0, ""
+			m = m.newEnvForm()
 		case "e":
 			if m.envCursor < len(m.envs) {
-				v := m.envs[m.envCursor]
-				m.envForm, m.envValue, m.envField, m.envEditID = true, "", 1, v.ID
-				// -1 keeps the targets the variable already has until the
-				// user cycles to one, so changing a value leaves them alone
-				m.envPreset = -1
+				m = m.editEnvForm(m.envs[m.envCursor])
 			}
 		case "d":
 			if m.envCursor < len(m.envs) {

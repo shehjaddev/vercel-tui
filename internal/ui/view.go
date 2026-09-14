@@ -348,8 +348,8 @@ func (m Model) envFormView() string {
 		title = titleStyle.Render("Edit value of " + m.envKeyLabel() +
 			" on " + m.envProject.Name)
 	}
-	keyLine := marker(!editing && m.envField == 0) + " key:   " + m.envKey
-	valueLine := marker(editing || m.envField == 1) + " value: " + m.envValue
+	keyLine := marker(!editing && m.envField == keyField) + " key:   " + m.envKey
+	valueLine := marker(editing || m.envField == valueField) + " value: " + m.envValue
 	hint := ""
 	if editing {
 		keyLine = dimStyle.Render("  key:   " + m.envKeyLabel())
