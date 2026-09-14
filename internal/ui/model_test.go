@@ -303,3 +303,35 @@ func TestEnvEditKeepsStoredTargets(t *testing.T) {
 		}
 	}
 }
+
+// Dialogs and text fields read keystrokes themselves, which used to trap
+// ctrl+c: no mode could be left except with esc and a quit was unreachable.
+func TestCtrlCQuitsFromEveryInputMode(t *testing.T) {
+	base := func() Model {
+		m := New(api.New("tok"), true, 0, nil, "", "", ".")
+		m.width, m.height = 80, 24
+		return m
+	}
+	cases := map[string]func() Model{
+		"deployments":    func() Model { return base() },
+		"login":          func() Model { return New(api.New("tok"), false, 0, nil, "", "", ".") },
+		"confirm dialog": func() Model { m := base(); m.pending = pendDelete; return m },
+		"list filter":    func() Model { m := base(); m.filterFocus = true; return m },
+		"log search":     func() Model { m := base(); m.searchFocus = true; return m },
+		"env form":       func() Model { m := base(); m.envForm = true; return m },
+		"env edit form":  func() Model { m := base(); m.envForm, m.envEditID = true, "env_1"; return m },
+		"team picker":    func() Model { m := base(); m.teamSel = true; return m },
+		"help overlay":   func() Model { m := base(); m.help = true; return m },
+		"actions menu":   func() Model { m := base(); m.mode = modeActions; return m },
+	}
+	for name, build := range cases {
+		_, cmd := build().Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+		if cmd == nil {
+			t.Errorf("%s: ctrl+c does nothing", name)
+			continue
+		}
+		if _, quit := cmd().(tea.QuitMsg); !quit {
+			t.Errorf("%s: ctrl+c produced %T, want tea.QuitMsg", name, cmd())
+		}
+	}
+}

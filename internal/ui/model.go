@@ -907,10 +907,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	m.err = "" // any keypress dismisses an action error
+	// ctrl+c quits from anywhere. Dialogs and text fields read keystrokes
+	// themselves, so without this they trap the user in a mode they can only
+	// leave with esc.
+	if key == "ctrl+c" {
+		return m, tea.Quit
+	}
 
 	if m.mode == modeLogin {
 		switch key {
-		case "ctrl+c", "esc":
+		case "esc":
 			return m, tea.Quit
 		case "enter":
 			if m.tokenBuf != "" {
@@ -1056,7 +1062,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch key {
-	case "q", "ctrl+c":
+	case "q":
 		return m, tea.Quit
 	case "?":
 		m.help = true
