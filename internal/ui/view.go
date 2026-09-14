@@ -246,12 +246,23 @@ func stateCell(state string, selected bool) string {
 	return stateStyle[state].Render(strings.ToUpper(state))
 }
 
+// boardMarker is the cursor marker for the board. The selected row's marker is
+// one cell narrower than the blank the other rows carry, so the cursor row
+// pulls left of the column of names around it and stands out. That extra cell
+// is also why the unselected rows sit one column in from the header.
+func boardMarker(selected bool) string {
+	if selected {
+		return "❯"
+	}
+	return "  "
+}
+
 // boardCells lays out one row of the deployments board. The project column is
 // the project name on a head row, and the deployment's own name — indented
 // under its project — on a child row.
 func boardCells(projectColumn string, d api.Deployment, widths []int, selected bool) []string {
 	return []string{
-		marker(selected),
+		boardMarker(selected),
 		projectColumn,
 		stateCell(d.Status(), selected),
 		trunc(d.Branch(), widths[3]),

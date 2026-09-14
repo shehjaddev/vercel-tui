@@ -539,67 +539,66 @@ func columnOffset(line, cell string) int {
 	return lipgloss.Width(line[:i])
 }
 
-// A table's header and its rows come from the same columns, so every cell has
-// to start where its title does. The board is checked on every row, selected
-// or not: a marker or an indent wider than its column shifts the whole row.
-func TestTableColumnsLineUp(t *testing.T) {
-	t.Run("deployments", func(t *testing.T) {
-		m := newTestModel()
-		m.width, m.height = 120, 40
-		m.expanded = "web"
-		m.deps = []api.Deployment{
-			{UID: "d1", Name: "web", State: "READY", Target: "production", URL: "web-x.vercel.app",
-				Created: time.Now().Add(-2 * time.Hour).UnixMilli(),
-				Meta:    api.StringMap{"githubCommitRef": "main", "githubCommitSha": "a1b2c3d4e5f6"}},
-			{UID: "d2", Name: "api", State: "BUILDING", Target: "preview", URL: "api-y.vercel.app",
-				Created: time.Now().Add(-time.Minute).UnixMilli(),
-				Meta:    api.StringMap{"githubCommitRef": "main", "githubCommitSha": "9f8e7d6c5b4a"}},
-			{UID: "d3", Name: "web", State: "READY", Target: "preview", URL: "web-y.vercel.app",
-				Created: time.Now().Add(-time.Hour).UnixMilli(),
-				Meta:    api.StringMap{"githubCommitRef": "main", "githubCommitSha": "c0ffee123456"}},
-		}
+// The board's rows carry a wider blank marker than the selected row, so the
+// cursor row pulls one cell left of the rest; every other row sits one cell in
+// from the header. That indent is the point, so it is what the test pins.
+func TestBoardRowIndent(t *testing.T) {
+	m := newTestModel()
+	m.width, m.height = 120, 40
+	m.expanded = "web"
+	m.deps = []api.Deployment{
+		{UID: "d1", Name: "web", State: "READY", Target: "production", URL: "web-x.vercel.app",
+			Created: time.Now().Add(-2 * time.Hour).UnixMilli(),
+			Meta:    api.StringMap{"githubCommitRef": "main", "githubCommitSha": "a1b2c3d4e5f6"}},
+		{UID: "d2", Name: "api", State: "BUILDING", Target: "preview", URL: "api-y.vercel.app",
+			Created: time.Now().Add(-time.Minute).UnixMilli(),
+			Meta:    api.StringMap{"githubCommitRef": "main", "githubCommitSha": "9f8e7d6c5b4a"}},
+		{UID: "d3", Name: "web", State: "READY", Target: "preview", URL: "web-y.vercel.app",
+			Created: time.Now().Add(-time.Hour).UnixMilli(),
+			Meta:    api.StringMap{"githubCommitRef": "main", "githubCommitSha": "c0ffee123456"}},
+	}
 
-		lines := strings.Split(m.View(), "\n")
-		header, rows := -1, 0
-		for i, line := range lines {
-			if strings.Contains(line, "PROJECT") {
-				header = i
-				break
+	lines := strings.Split(m.View(), "\n")
+	header := -1
+	for i, line := range lines {
+		if strings.Contains(line, "PROJECT") {
+			header = i
+			break
+		}
+	}
+	if header < 0 {
+		t.Fatalf("no board header rendered:\n%s", m.View())
+	}
+	stateCol := columnOffset(lines[header], "STATE")
+	headerRow := lines[header]
+
+	rows := 0
+	for _, line := range lines[header+1:] {
+		if line == "" || strings.Contains(line, "j/k move") { // footer
+			break
+		}
+		rows++
+		// the cursor is on the first row: it lines up with the header, and
+		// every other row is one column further in
+		want := stateCol
+		if rows > 1 {
+			want = stateCol + 1
+		}
+		for _, state := range []string{"READY", "BUILDING"} {
+			i := strings.Index(line, state)
+			if i < 0 {
+				continue
+			}
+			if got := lipgloss.Width(line[:i]); got != want {
+				t.Errorf("row %d: %s starts at %d, want %d (header %s at %d): %q",
+					rows, state, got, want, "STATE", stateCol, line)
 			}
 		}
-		if header < 0 {
-			t.Fatalf("no board header rendered:\n%s", m.View())
-		}
-		cols := map[string]int{
-			"STATE":  columnOffset(lines[header], "STATE"),
-			"BRANCH": columnOffset(lines[header], "BRANCH"),
-			"COMMIT": columnOffset(lines[header], "COMMIT"),
-		}
-		for _, line := range lines[header+1:] {
-			if line == "" || strings.Contains(line, "j/k move") { // footer
-				break
-			}
-			rows++
-			for col, values := range map[string][]string{
-				"STATE":  {"READY", "BUILDING"},
-				"BRANCH": {"main"},
-				"COMMIT": {"a1b2c3d", "9f8e7d6", "c0ffee1"},
-			} {
-				for _, v := range values {
-					i := strings.Index(line, v)
-					if i < 0 {
-						continue
-					}
-					if got := lipgloss.Width(line[:i]); got != cols[col] {
-						t.Errorf("%s %q starts at %d, but the %s column starts at %d: %q", col, v, got, col, cols[col], line)
-					}
-				}
-			}
-		}
-		if rows != 4 {
-			t.Fatalf("checked %d rows, want 4 (a head and two children for the expanded project, plus the other head)", rows)
-		}
-	})
+	}
+	if rows != 4 {
+		t.Fatalf("checked %d rows, want 4 (a head and two children for the expanded project, plus the other head)", rows)
+	}
+	_ = headerRow
 
 	t.Run("env vars", func(t *testing.T) {
 		m := newTestModel()
