@@ -17,11 +17,11 @@ const VERCEL_CLI_CLIENT_ID = "cl_HYyOPBNtFMfHhaUn9L4QPfTZz6TP47bp"
 
 const tokenEndpoint = "https://api.vercel.com/login/oauth/token"
 
+// cliAuth is the part of the CLI's credentials file we read. Other fields are
+// left in place by SaveCLIAuth, which round-trips the file as a map.
 type cliAuth struct {
 	Token        string `json:"token"`
 	RefreshToken string `json:"refreshToken"`
-	ExpiresAt    int64  `json:"expiresAt"`
-	UserID       string `json:"userId"`
 }
 
 // LoadCLIAuth returns the access and refresh tokens from the official CLI's

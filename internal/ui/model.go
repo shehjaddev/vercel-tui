@@ -118,7 +118,6 @@ type depsMsg struct {
 	deps          []api.Deployment
 	team, project string
 }
-type detailMsg struct{ d *api.Deployment }
 type detailsMsg struct {
 	byKey map[string]api.Deployment
 	tried []string // keys the batch attempted, including the ones that failed

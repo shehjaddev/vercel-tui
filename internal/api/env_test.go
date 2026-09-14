@@ -80,9 +80,4 @@ func TestDomains(t *testing.T) {
 	if gotPath != "/v9/projects/proj_1/domains" {
 		t.Errorf("path = %s", gotPath)
 	}
-
-	d, err = c.TeamDomains(context.Background(), "")
-	if err != nil || len(d) != 1 || gotPath != "/v5/domains" {
-		t.Fatalf("team domains: %v %+v path=%s", err, d, gotPath)
-	}
 }

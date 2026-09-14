@@ -66,13 +66,3 @@ func (c *Client) ProjectDomains(ctx context.Context, projectID, teamID string) (
 	}
 	return out.Domains, nil
 }
-
-func (c *Client) TeamDomains(ctx context.Context, teamID string) ([]Domain, error) {
-	var out struct {
-		Domains []Domain `json:"domains"`
-	}
-	if err := c.get(ctx, "/v5/domains", scoped(url.Values{"limit": {"100"}}, teamID), &out); err != nil {
-		return nil, err
-	}
-	return out.Domains, nil
-}

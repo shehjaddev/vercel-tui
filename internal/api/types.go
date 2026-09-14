@@ -145,8 +145,6 @@ func (m *StringMap) UnmarshalJSON(b []byte) error {
 			out[k] = strconv.FormatBool(t)
 		case float64:
 			out[k] = strconv.FormatFloat(t, 'f', -1, 64)
-		case json.Number:
-			out[k] = t.String()
 		default:
 			if bb, err := json.Marshal(t); err == nil {
 				out[k] = string(bb)
@@ -192,13 +190,6 @@ type Project struct {
 		Org  string `json:"org"`
 		Repo string `json:"repo"`
 	} `json:"link"`
-}
-
-func (p Project) Repo() string {
-	if p.Link.Repo == "" {
-		return ""
-	}
-	return p.Link.Org + "/" + p.Link.Repo
 }
 
 type Team struct {

@@ -95,17 +95,6 @@ func parseEvents(body []byte) ([]Event, error) {
 	return events, sc.Err()
 }
 
-func (c *Client) Projects(ctx context.Context, teamID string, limit int) ([]Project, error) {
-	q := url.Values{"limit": {strconv.Itoa(limit)}}
-	var out struct {
-		Projects []Project `json:"projects"`
-	}
-	if err := c.get(ctx, "/v9/projects", scoped(q, teamID), &out); err != nil {
-		return nil, err
-	}
-	return out.Projects, nil
-}
-
 func (c *Client) Teams(ctx context.Context) ([]Team, error) {
 	var out struct {
 		Teams []Team `json:"teams"`
