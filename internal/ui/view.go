@@ -360,7 +360,7 @@ func (m Model) envFormView() string {
 		"",
 		keyLine,
 		valueLine + hint,
-		"targets: " + warnStyle.Render(targetPresets[m.envPreset].label) + dimStyle.Render("  (t cycles)"),
+		"targets: " + warnStyle.Render(m.envTargetsLabel()) + dimStyle.Render("  (t cycles)"),
 		"",
 		dimStyle.Render("enter next/save · tab switch field · esc cancel"),
 	}, "\n") + "\n"
@@ -373,6 +373,28 @@ func (m Model) envKeyLabel() string {
 		}
 	}
 	return "?"
+}
+
+// envTargetsLabel describes the target choice the env form will save. While
+// editing, the default choice is to keep whatever the variable already has.
+func (m Model) envTargetsLabel() string {
+	if m.envPreset >= 0 {
+		return targetPresets[m.envPreset].label
+	}
+	if names := m.envTargets(); len(names) > 0 {
+		return strings.Join(names, ", ") + " (unchanged)"
+	}
+	return "(unchanged)"
+}
+
+// envTargets returns the stored targets of the variable being edited.
+func (m Model) envTargets() []string {
+	for _, e := range m.envs {
+		if e.ID == m.envEditID {
+			return e.Target
+		}
+	}
+	return nil
 }
 
 func (m Model) loginView() string {

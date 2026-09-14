@@ -422,12 +422,30 @@ func (m *Model) fetchEnvs() tea.Cmd {
 	}
 }
 
+// nextEnvPreset advances the target choice in the env form. While editing,
+// cycling past the last preset wraps back to keeping the stored targets.
+func (m Model) nextEnvPreset() int {
+	next := m.envPreset + 1
+	if next < len(targetPresets) {
+		return next
+	}
+	if m.envEditID != "" {
+		return -1
+	}
+	return 0
+}
+
 func (m Model) submitEnv() tea.Cmd {
 	ctx, c, team := m.scopeCtx(), m.client, m.teamID()
 	project := m.envProject.ID
 	key, value := m.envKey, m.envValue
-	targets := targetPresets[m.envPreset].values
 	editID := m.envEditID
+	// editing starts on "keep the stored targets" (-1): only send a target
+	// list once the user has actually picked one
+	var targets []string
+	if m.envPreset >= 0 {
+		targets = targetPresets[m.envPreset].values
+	}
 	return func() tea.Msg {
 		var err error
 		if editID != "" {
@@ -952,7 +970,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.envField = (m.envField + 1) % 2
 			}
 		case "t":
-			m.envPreset = (m.envPreset + 1) % len(targetPresets)
+			m.envPreset = m.nextEnvPreset()
 		case "enter":
 			if m.envField == 0 && m.envEditID == "" {
 				if m.envKey != "" {
@@ -1244,13 +1262,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.envCursor < len(m.envs) {
 				v := m.envs[m.envCursor]
 				m.envForm, m.envValue, m.envField, m.envEditID = true, "", 1, v.ID
-				if len(v.Target) == 1 {
-					for i, p := range targetPresets {
-						if p.label == v.Target[0] {
-							m.envPreset = i
-						}
-					}
-				}
+				// -1 keeps the targets the variable already has until the
+				// user cycles to one, so changing a value leaves them alone
+				m.envPreset = -1
 			}
 		case "d":
 			if m.envCursor < len(m.envs) {

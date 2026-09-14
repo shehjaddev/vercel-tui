@@ -272,3 +272,34 @@ func TestLogsShrinkClampsScroll(t *testing.T) {
 		t.Fatalf("shrunken log not rendered:\n%s", view)
 	}
 }
+
+// Editing a value must not rewrite targets the user never chose: a variable
+// on production and preview kept coming back on production alone.
+func TestEnvEditKeepsStoredTargets(t *testing.T) {
+	m := New(api.New("tok"), true, 0, nil, "", "", ".")
+	m.width, m.height = 80, 24
+	m.mode = modeEnvs
+	m.envProject = api.Project{Name: "web", ID: "prj_1"}
+	m.envs = []api.EnvVar{{
+		ID: "env_1", Key: "API_KEY", Type: "encrypted",
+		Target: []string{"production", "preview"},
+	}}
+
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	got := model.(Model)
+	if got.envPreset != -1 {
+		t.Fatalf("envPreset = %d, want -1 (keep the stored targets)", got.envPreset)
+	}
+	if label := got.envTargetsLabel(); label != "production, preview (unchanged)" {
+		t.Fatalf("target label = %q", label)
+	}
+
+	// cycling reaches every preset and wraps back to keeping the stored ones
+	for _, want := range []int{0, 1, 2, 3, -1} {
+		model, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+		got = model.(Model)
+		if got.envPreset != want {
+			t.Fatalf("cycle: envPreset = %d, want %d", got.envPreset, want)
+		}
+	}
+}

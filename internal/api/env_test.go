@@ -45,9 +45,14 @@ func TestEnvCRUD(t *testing.T) {
 	if err != nil || method != "PATCH" || path != "/v10/projects/proj_1/env/env_1" {
 		t.Errorf("update: %s %s %v", method, path, err)
 	}
+	b = nil // decode the update body on its own, not merged into the create body
 	json.Unmarshal([]byte(body), &b)
 	if b["value"] != "newval" {
 		t.Errorf("update body: %s", body)
+	}
+	// a value-only edit must leave the variable's targets alone
+	if _, ok := b["target"]; ok {
+		t.Errorf("target sent for a value-only update: %s", body)
 	}
 
 	if err := c.DeleteEnv(context.Background(), "proj_1", "", "env_1"); err != nil || method != "DELETE" {
