@@ -29,10 +29,29 @@ const (
 
 var stateFilters = []string{"", "building", "ready", "error", "canceled", "queued"}
 
-var targetPresets = []struct {
+const (
+	// initPollDelay is how long after startup the first refresh runs, so the
+	// window can draw before the network does.
+	initPollDelay = 2 * time.Second
+	// buildingPoll caps the interval while a build is running.
+	buildingPoll = 2 * time.Second
+	// liveLogPoll is how often a watched deployment's events are re-fetched.
+	liveLogPoll = 2 * time.Second
+	// noteLifetime is how long a status line stays in the footer.
+	noteLifetime = 3 * time.Second
+	// detailGap and domainGap space the background batches out far enough to
+	// stay clear of the API's rate limit.
+	detailGap = 1200 * time.Millisecond
+	domainGap = 400 * time.Millisecond
+)
+
+// targetPreset is one entry in the env form's target cycle.
+type targetPreset struct {
 	label  string
 	values []string
-}{
+}
+
+var targetPresets = []targetPreset{
 	{"production", []string{"production"}},
 	{"preview", []string{"preview"}},
 	{"development", []string{"development"}},
@@ -199,7 +218,7 @@ func (m Model) Init() tea.Cmd {
 	if m.mode == modeLogin {
 		return nil
 	}
-	return tea.Batch(fetchTeams(m.scopeCtx(), m.client), schedule(2*time.Second))
+	return tea.Batch(fetchTeams(m.scopeCtx(), m.client), schedule(initPollDelay))
 }
 
 func schedule(d time.Duration) tea.Cmd {
@@ -265,15 +284,14 @@ func (m Model) unlinkCmd() (Model, tea.Cmd) {
 	return m, cmd
 }
 
-// fetchDetail fetches one deployment's full detail (aliases) and caches it
-// keyed by id. It's fired only for the selected row — one request at a time,
-// which is all Vercel's rate limit reliably allows. Cached so returning to a
-// row is instant.
+// fetchDetail fetches one deployment's full detail — the object that carries
+// its project and aliases — and caches it by key. It is fired only for the
+// selected row, one request at a time, which is all Vercel's rate limit
+// reliably allows, and the cache is what makes returning to a row instant.
 func (m Model) fetchDetail(d api.Deployment) tea.Cmd {
-	ctx, c, id, team := m.scopeCtx(), m.client, d.Key(), m.teamID()
-	key := d.Key()
+	ctx, c, key, team := m.scopeCtx(), m.client, d.Key(), m.teamID()
 	return func() tea.Msg {
-		full, err := c.Deployment(ctx, id, team)
+		full, err := c.Deployment(ctx, key, team)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -778,14 +796,14 @@ func (m *Model) loadCurrent() tea.Cmd {
 
 func (m Model) nextInterval() time.Duration {
 	if m.mode == modeLogs {
-		return 2 * time.Second
+		return liveLogPoll
 	}
 	if m.refresh == 0 {
 		return 0
 	}
 	for _, d := range m.deps {
 		if d.CanCancel() { // a build is in progress: poll faster
-			return min(m.refresh, 2*time.Second)
+			return min(m.refresh, buildingPoll)
 		}
 	}
 	return m.refresh
@@ -797,7 +815,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 
 	case tickMsg:
-		if !m.noteAt.IsZero() && time.Since(m.noteAt) > 3*time.Second {
+		if !m.noteAt.IsZero() && time.Since(m.noteAt) > noteLifetime {
 			m.note = ""
 		}
 		var cmds []tea.Cmd
@@ -886,10 +904,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modeDeployments {
 			var cmds []tea.Cmd
 			if h := m.fetchNextHeads(); h != nil {
-				cmds = append(cmds, tea.Sequence(sleep(1200*time.Millisecond), h))
+				cmds = append(cmds, tea.Sequence(sleep(detailGap), h))
 			}
 			if d := m.fetchNextDomains(); d != nil {
-				cmds = append(cmds, tea.Sequence(sleep(400*time.Millisecond), d))
+				cmds = append(cmds, tea.Sequence(sleep(domainGap), d))
 			}
 			if len(cmds) > 0 {
 				return m, tea.Batch(cmds...)
@@ -914,7 +932,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.mode == modeDeployments {
 			if cmd := m.fetchNextDomains(); cmd != nil {
-				return m, tea.Sequence(sleep(400*time.Millisecond), cmd)
+				return m, tea.Sequence(sleep(domainGap), cmd)
 			}
 		}
 
@@ -1396,12 +1414,19 @@ func (m *Model) searchNext() {
 	m.noteAt = time.Now()
 }
 
+// stateFilter is the state the list is filtered to, empty when there is none.
+// stateFilters[0] is the "no filter" entry, so index 0 means the same thing as
+// being out of range.
+func (m Model) stateFilter() string {
+	if m.stateIdx <= 0 || m.stateIdx >= len(stateFilters) {
+		return ""
+	}
+	return stateFilters[m.stateIdx]
+}
+
 func (m Model) visibleDeps() []api.Deployment {
 	var out []api.Deployment
-	state := ""
-	if m.stateIdx >= 0 && m.stateIdx < len(stateFilters) {
-		state = strings.ToLower(stateFilters[m.stateIdx])
-	}
+	state := m.stateFilter()
 	q := strings.ToLower(m.filter)
 	for _, d := range m.deps {
 		if state != "" && d.Status() != state {
@@ -1422,13 +1447,12 @@ func (m Model) visibleDeps() []api.Deployment {
 	return out
 }
 
-// displayRow is one renderable row in the deployments view.
+// displayRow is one row of the deployments board: a project head row (project
+// set, dep is that project's latest deployment) or a deployment under an
+// expanded project (dep only).
 type displayRow struct {
-	project string          // non-empty for a project head row
-	dep     *api.Deployment // set for a child deployment row
-	count   int             // child count, only for head rows
-	indent  bool            // child row; render with a tree indent glyph
-	last    bool            // last child of an expanded project; renders └──
+	project string
+	dep     *api.Deployment
 }
 
 // displayRows returns the rows to show: when grouped, one head row per
@@ -1446,10 +1470,10 @@ func (m Model) displayRows() []displayRow {
 	// group by project, preserving newest-first order of first appearance
 	var rows []displayRow
 	for _, g := range groupByProject(deps) {
-		rows = append(rows, displayRow{project: g.name, count: len(g.deployments), dep: &g.deployments[0]})
+		rows = append(rows, displayRow{project: g.name, dep: &g.deployments[0]})
 		if g.name == m.expanded {
 			for i := range g.deployments {
-				rows = append(rows, displayRow{dep: &g.deployments[i], indent: true, last: i == len(g.deployments)-1})
+				rows = append(rows, displayRow{dep: &g.deployments[i]})
 			}
 		}
 	}

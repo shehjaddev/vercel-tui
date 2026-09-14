@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/charmbracelet/bubbletea"
 
@@ -508,7 +511,7 @@ func TestDisplayRowsGrouping(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("grouped rows = %d, want one head per project (2)", len(rows))
 	}
-	if rows[0].project != "alpha" || rows[0].count != 2 || rows[0].dep.Key() != "a1" {
+	if rows[0].project != "alpha" || rows[0].dep.Key() != "a1" {
 		t.Fatalf("first head = %+v (dep %+v), want alpha's latest (a1)", rows[0], rows[0].dep)
 	}
 	if rows[1].project != "beta" || rows[1].dep.Key() != "b1" {
@@ -520,15 +523,119 @@ func TestDisplayRowsGrouping(t *testing.T) {
 	if len(rows) != 4 {
 		t.Fatalf("expanded rows = %d, want head, two children and the other head (4)", len(rows))
 	}
-	if rows[1].dep.Key() != "a1" || !rows[1].indent || rows[1].last {
-		t.Fatalf("first child = %+v, want a1 indented and not last", rows[1])
-	}
-	if rows[2].dep.Key() != "a2" || !rows[2].last {
-		t.Fatalf("last child = %+v, want a2 marked last", rows[2])
+	for i, want := range []string{"a1", "a1", "a2", "b1"} {
+		if got := rows[i].dep.Key(); got != want {
+			t.Fatalf("row %d is %s, want %s", i, got, want)
+		}
 	}
 
 	m.grouped = false
 	if rows = m.displayRows(); len(rows) != 3 {
 		t.Fatalf("flat rows = %d, want every deployment (3)", len(rows))
 	}
+}
+
+// columnOffset is the visible column a cell starts at in a rendered line.
+func columnOffset(line, cell string) int {
+	i := strings.Index(line, cell)
+	if i < 0 {
+		return -1
+	}
+	return lipgloss.Width(line[:i])
+}
+
+// A table's header and its rows come from the same columns, so every cell has
+// to start where its title does. The board is checked on every row, selected
+// or not: a marker or an indent wider than its column shifts the whole row.
+func TestTableColumnsLineUp(t *testing.T) {
+	t.Run("deployments", func(t *testing.T) {
+		m := newTestModel()
+		m.width, m.height = 120, 40
+		m.expanded = "web"
+		m.deps = []api.Deployment{
+			{UID: "d1", Name: "web", State: "READY", Target: "production", URL: "web-x.vercel.app",
+				Created: time.Now().Add(-2 * time.Hour).UnixMilli(),
+				Meta:    api.StringMap{"githubCommitRef": "main", "githubCommitSha": "a1b2c3d4e5f6"}},
+			{UID: "d2", Name: "api", State: "BUILDING", Target: "preview", URL: "api-y.vercel.app",
+				Created: time.Now().Add(-time.Minute).UnixMilli(),
+				Meta:    api.StringMap{"githubCommitRef": "main", "githubCommitSha": "9f8e7d6c5b4a"}},
+			{UID: "d3", Name: "web", State: "READY", Target: "preview", URL: "web-y.vercel.app",
+				Created: time.Now().Add(-time.Hour).UnixMilli(),
+				Meta:    api.StringMap{"githubCommitRef": "main", "githubCommitSha": "c0ffee123456"}},
+		}
+
+		lines := strings.Split(m.View(), "\n")
+		header, rows := -1, 0
+		for i, line := range lines {
+			if strings.Contains(line, "PROJECT") {
+				header = i
+				break
+			}
+		}
+		if header < 0 {
+			t.Fatalf("no board header rendered:\n%s", m.View())
+		}
+		cols := map[string]int{
+			"STATE":  columnOffset(lines[header], "STATE"),
+			"BRANCH": columnOffset(lines[header], "BRANCH"),
+			"COMMIT": columnOffset(lines[header], "COMMIT"),
+		}
+		for _, line := range lines[header+1:] {
+			if line == "" || strings.Contains(line, "j/k move") { // footer
+				break
+			}
+			rows++
+			for col, values := range map[string][]string{
+				"STATE":  {"READY", "BUILDING"},
+				"BRANCH": {"main"},
+				"COMMIT": {"a1b2c3d", "9f8e7d6", "c0ffee1"},
+			} {
+				for _, v := range values {
+					i := strings.Index(line, v)
+					if i < 0 {
+						continue
+					}
+					if got := lipgloss.Width(line[:i]); got != cols[col] {
+						t.Errorf("%s %q starts at %d, but the %s column starts at %d: %q", col, v, got, col, cols[col], line)
+					}
+				}
+			}
+		}
+		if rows != 4 {
+			t.Fatalf("checked %d rows, want 4 (a head and two children for the expanded project, plus the other head)", rows)
+		}
+	})
+
+	t.Run("env vars", func(t *testing.T) {
+		m := newTestModel()
+		m.width, m.height = 120, 40
+		m.mode = modeEnvs
+		m.envProject = api.Project{Name: "web", ID: "prj_1"}
+		m.envs = []api.EnvVar{
+			{ID: "e1", Key: "API_KEY", Target: []string{"production", "preview"}, Type: "encrypted"},
+			{ID: "e2", Key: "TOKEN", Target: []string{"production"}, Type: "sensitive"},
+		}
+
+		header, row := "", ""
+		for _, line := range strings.Split(m.View(), "\n") {
+			switch {
+			case strings.Contains(line, "TARGETS"):
+				header = line
+			case strings.Contains(line, "API_KEY"):
+				row = line
+			}
+		}
+		if header == "" || row == "" {
+			t.Fatalf("env table not rendered:\n%s", m.View())
+		}
+		for _, p := range [][2]string{{"KEY", "API_KEY"}, {"TARGETS", "production, preview"}, {"TYPE", "encrypted"}} {
+			want, got := columnOffset(header, p[0]), columnOffset(row, p[1])
+			if want < 0 || got < 0 {
+				t.Fatalf("%s / %s not rendered in the row:\n%s", p[0], p[1], m.View())
+			}
+			if want != got {
+				t.Errorf("%s starts at %d, but its cell %q starts at %d", p[0], want, p[1], got)
+			}
+		}
+	})
 }

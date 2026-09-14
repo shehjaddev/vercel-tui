@@ -28,6 +28,52 @@ var (
 	}
 )
 
+// column describes one table column. The header and the rows of a table are
+// built from the same list, so a width can't drift away from its title.
+type column struct {
+	title string
+	width int
+}
+
+// columns is a table's columns, in render order.
+type columns []column
+
+func (c columns) widths() []int {
+	out := make([]int, len(c))
+	for i, col := range c {
+		out[i] = col.width
+	}
+	return out
+}
+
+func (c columns) titles() []string {
+	out := make([]string, len(c))
+	for i, col := range c {
+		out[i] = col.title
+	}
+	return out
+}
+
+// The board is sized for its content: a name, a state, a branch, a short sha
+// and two relative times, tight enough to read as one block.
+var boardColumns = columns{
+	{title: "", width: 1},
+	{title: "PROJECT", width: 20},
+	{title: "STATE", width: 10},
+	{title: "BRANCH", width: 22},
+	{title: "COMMIT", width: 9},
+	{title: "AGE", width: 10},
+	{title: "ACTIVITY", width: 11},
+}
+
+var envColumns = columns{
+	{title: "", width: 1},
+	{title: "KEY", width: 31},
+	{title: "TARGETS", width: 29},
+	{title: "TYPE", width: 11},
+	{title: "UPDATED", width: 12},
+}
+
 func (m Model) View() string {
 	if m.width == 0 {
 		return "loading…"
@@ -73,8 +119,8 @@ func (m Model) statusBar() string {
 	if m.filter != "" {
 		parts = append(parts, "filter: "+m.filter)
 	}
-	if m.mode == modeDeployments && m.stateIdx >= 0 && m.stateIdx < len(stateFilters) && stateFilters[m.stateIdx] != "" {
-		parts = append(parts, "state: "+stateFilters[m.stateIdx])
+	if state := m.stateFilter(); m.mode == modeDeployments && state != "" {
+		parts = append(parts, "state: "+state)
 	}
 	if m.branchFlag != "" {
 		parts = append(parts, "branch: "+m.branchFlag)
@@ -106,9 +152,9 @@ func (m Model) deploymentsView() string {
 	detail := m.topDetail()
 
 	// --- list ---
-	widths := m.boardWidths()
+	widths := boardColumns.widths()
 	var body []string
-	body = append(body, headerStyle.Render(row(widths, "", "PROJECT", "STATE", "BRANCH", "COMMIT", "AGE", "ACTIVITY")))
+	body = append(body, headerStyle.Render(row(widths, boardColumns.titles()...)))
 	maxRows := max(m.height-9, 1)
 	start := clamp(m.depCursor-maxRows+2, 0, max(len(rows)-maxRows, 0))
 	for i := start; i < min(start+maxRows, len(rows)); i++ {
@@ -117,10 +163,10 @@ func (m Model) deploymentsView() string {
 		var cells []string
 		switch {
 		case r.project != "":
-			// a head row carries its latest deployment as the summary
-			cells = m.boardHeadCells(r.project, r.dep, widths, m.expanded == r.project, sel)
+			// a head row summarises the project with its latest deployment
+			cells = boardCells(trunc(r.project, widths[1]), *r.dep, widths, sel)
 		case r.dep != nil:
-			cells = m.boardChildCells(*r.dep, widths, sel)
+			cells = boardCells(childIndent+trunc(r.dep.Name, widths[1]-6), *r.dep, widths, sel)
 		}
 		line := row(widths, cells...)
 		if sel {
@@ -203,55 +249,23 @@ func (m Model) topDetailSeparator() string {
 	return "\n" + dimStyle.Render(strings.Repeat("─", min(m.width-2, 60))) + "\n"
 }
 
-// boardWidths sizes the board columns; content-driven, modest, so the
-// overview reads tight rather than spread out and cluttered.
-func (m Model) boardWidths() []int {
-	return []int{1, 20, 10, 22, 9, 10, 11}
+// stateCell renders a deployment state. A selected row already carries the
+// highlight, so its state keeps the plain text instead of its own color.
+func stateCell(state string, selected bool) string {
+	if selected {
+		return strings.ToUpper(state)
+	}
+	return stateStyle[state].Render(strings.ToUpper(state))
 }
 
-func (m Model) boardHeadCells(project string, latest *api.Deployment, widths []int, expanded, selected bool) []string {
-	mark := "  "
-	if selected {
-		mark = "❯"
-	}
-	state, branch, sha, age, activity := "", "", "", "", ""
-	if latest != nil {
-		st := latest.Status()
-		if selected {
-			state = strings.ToUpper(st) // inherit the selection highlight
-		} else {
-			state = stateStyle[st].Render(strings.ToUpper(st))
-		}
-		branch = latest.Branch()
-		sha = latest.ShortSHA()
-		age = relAge(latest.CreatedMs())
-		activity = relAge(latest.LastActivityMs())
-	}
+// boardCells lays out one row of the deployments board. The project column is
+// the project name on a head row, and the deployment's own name — indented
+// under its project — on a child row.
+func boardCells(projectColumn string, d api.Deployment, widths []int, selected bool) []string {
 	return []string{
-		mark,
-		trunc(project, widths[1]),
-		state,
-		trunc(branch, widths[3]),
-		trunc(sha, widths[4]),
-		age,
-		activity,
-	}
-}
-
-func (m Model) boardChildCells(d api.Deployment, widths []int, selected bool) []string {
-	st := d.Status()
-	mark := "  "
-	if selected {
-		mark = "❯"
-	}
-	state := stateStyle[st].Render(strings.ToUpper(st))
-	if selected {
-		state = strings.ToUpper(st) // inherit the selection highlight
-	}
-	return []string{
-		mark,
-		"  " + trunc(d.Name, widths[1]-6),
-		state,
+		marker(selected),
+		projectColumn,
+		stateCell(d.Status(), selected),
 		trunc(d.Branch(), widths[3]),
 		trunc(d.ShortSHA(), widths[4]),
 		relAge(d.CreatedMs()),
@@ -310,7 +324,7 @@ func (m Model) envVarsView() string {
 	if len(m.envs) == 0 {
 		return head + "\n" + dimStyle.Render("no environment variables (n to create)") + "\n"
 	}
-	rows := []string{headerStyle.Render(row(envWidths, "", "KEY", "TARGETS", "TYPE", "UPDATED"))}
+	rows := []string{headerStyle.Render(row(envColumns.widths(), envColumns.titles()...))}
 	maxRows := max(m.height-8, 1)
 	start := clamp(m.envCursor-maxRows+2, 0, max(len(m.envs)-maxRows, 0))
 	for i := start; i < min(start+maxRows, len(m.envs)); i++ {
@@ -326,7 +340,7 @@ func (m Model) envVarsView() string {
 			e.Type,
 			relAge(int64(e.UpdatedAt)),
 		}
-		line := row(envWidths, cells...)
+		line := row(envColumns.widths(), cells...)
 		if i == m.envCursor {
 			line = selectedStyle.Render(line)
 		}
@@ -507,8 +521,6 @@ func (m Model) footer() string {
 	return line
 }
 
-var envWidths = []int{1, 31, 29, 11, 12}
-
 func row(widths []int, cells ...string) string {
 	var b strings.Builder
 	for i, c := range cells {
@@ -518,7 +530,8 @@ func row(widths []int, cells ...string) string {
 	return strings.TrimRight(b.String(), " ")
 }
 
-// pad right-aligns to a visible width, ignoring ANSI escape codes.
+// pad left-aligns s and spaces it out to w visible columns, ignoring ANSI
+// escape codes.
 func pad(s string, w int) string {
 	visible := lipgloss.Width(s) // strips ANSI so color escapes don't inflate width
 	if visible >= w {
@@ -527,6 +540,11 @@ func pad(s string, w int) string {
 	return s + strings.Repeat(" ", w-visible)
 }
 
+// childIndent sets an expanded project's deployments in from the header.
+const childIndent = "  "
+
+// mark is the one-cell cursor marker: every table row has the same marker
+// column, so a row with a marker still starts its cells where the header does.
 func marker(selected bool) string {
 	if selected {
 		return "❯"
