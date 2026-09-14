@@ -58,7 +58,7 @@ func (c columns) titles() []string {
 // The board is sized for its content: a name, a state, a branch, a short sha
 // and two relative times, tight enough to read as one block.
 var boardColumns = columns{
-	{title: "", width: 1},
+	{title: "", width: 2},
 	{title: "PROJECT", width: 20},
 	{title: "STATE", width: 10},
 	{title: "BRANCH", width: 22},
@@ -68,7 +68,7 @@ var boardColumns = columns{
 }
 
 var envColumns = columns{
-	{title: "", width: 1},
+	{title: "", width: 2},
 	{title: "KEY", width: 31},
 	{title: "TARGETS", width: 29},
 	{title: "TYPE", width: 11},
@@ -246,15 +246,14 @@ func stateCell(state string, selected bool) string {
 	return stateStyle[state].Render(strings.ToUpper(state))
 }
 
-// boardMarker is the cursor marker for the board. The selected row's marker is
-// one cell narrower than the blank the other rows carry, so the cursor row
-// pulls left of the column of names around it and stands out. That extra cell
-// is also why the unselected rows sit one column in from the header.
+// boardMarker is the marker for the board, where the rows that are not under
+// the cursor carry one extra cell. That indent pulls the cursor row left of
+// the names above and below it, which is what makes it stand out.
 func boardMarker(selected bool) string {
 	if selected {
-		return "❯"
+		return marker(true)
 	}
-	return "  "
+	return marker(false) + " "
 }
 
 // boardCells lays out one row of the deployments board. The project column is
@@ -283,9 +282,9 @@ func (m Model) actionsView() string {
 	for i, a := range actions {
 		line := a.label + dimStyle.Render("  ("+a.key+")")
 		if i == m.actionCursor {
-			out.WriteString(selectedStyle.Render("❯ "+line) + "\n")
+			out.WriteString(selectedStyle.Render(marker(true)+line) + "\n")
 		} else {
-			out.WriteString("  " + line + "\n")
+			out.WriteString(marker(false) + line + "\n")
 		}
 	}
 	out.WriteString("\n" + dimStyle.Render("enter run · j/k move · esc back"))
@@ -355,8 +354,8 @@ func (m Model) envFormView() string {
 		title = titleStyle.Render("Edit value of " + m.envKeyLabel() +
 			" on " + m.envProject.Name)
 	}
-	keyLine := marker(!editing && m.envField == keyField) + " key:   " + m.envKey
-	valueLine := marker(editing || m.envField == valueField) + " value: " + m.envValue
+	keyLine := marker(!editing && m.envField == keyField) + "key:   " + m.envKey
+	valueLine := marker(editing || m.envField == valueField) + "value: " + m.envValue
 	hint := ""
 	if editing {
 		keyLine = dimStyle.Render("  key:   " + m.envKeyLabel())
@@ -458,7 +457,7 @@ func (m Model) confirmView() string {
 func (m Model) teamView() string {
 	rows := []string{titleStyle.Render("Switch team"), ""}
 	for i, t := range m.teams {
-		line := marker(i == m.teamCursor) + " " + t.Name
+		line := marker(i == m.teamCursor) + t.Name
 		if i == m.teamCursor {
 			line = selectedStyle.Render(line)
 		}
@@ -546,13 +545,16 @@ func pad(s string, w int) string {
 // childIndent sets an expanded project's deployments in from the header.
 const childIndent = "  "
 
-// mark is the one-cell cursor marker: every table row has the same marker
-// column, so a row with a marker still starts its cells where the header does.
+// markerGap separates a row's marker from its first character.
+const markerGap = " "
+
+// marker is the cursor marker in front of a selected row: the glyph and a gap,
+// or the same two cells of blank, so rows line up whether or not they carry it.
 func marker(selected bool) string {
 	if selected {
-		return "❯"
+		return "❯" + markerGap
 	}
-	return ""
+	return " " + markerGap
 }
 
 func targetLabel(t string) string {

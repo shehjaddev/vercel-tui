@@ -598,6 +598,12 @@ func TestBoardRowIndent(t *testing.T) {
 	if rows != 4 {
 		t.Fatalf("checked %d rows, want 4 (a head and two children for the expanded project, plus the other head)", rows)
 	}
+
+	// the marker is followed by a gap, so it never touches the first character
+	cursor := lines[header+1]
+	if mark, name := columnOffset(cursor, "❯"), columnOffset(cursor, "web"); mark < 0 || name-mark != 2 {
+		t.Errorf("marker at %d and name at %d, want the marker then one gap cell: %q", mark, name, cursor)
+	}
 	_ = headerRow
 
 	t.Run("env vars", func(t *testing.T) {
@@ -610,20 +616,23 @@ func TestBoardRowIndent(t *testing.T) {
 			{ID: "e2", Key: "TOKEN", Target: []string{"production"}, Type: "sensitive"},
 		}
 
-		header, row := "", ""
+		header, dataRow := "", ""
 		for _, line := range strings.Split(m.View(), "\n") {
 			switch {
 			case strings.Contains(line, "TARGETS"):
 				header = line
 			case strings.Contains(line, "API_KEY"):
-				row = line
+				dataRow = line
 			}
 		}
-		if header == "" || row == "" {
+		if header == "" || dataRow == "" {
 			t.Fatalf("env table not rendered:\n%s", m.View())
 		}
+		if mark, key := columnOffset(dataRow, "❯"), columnOffset(dataRow, "API_KEY"); mark < 0 || key-mark != 2 {
+			t.Errorf("marker at %d and key at %d, want the marker then one gap cell: %q", mark, key, dataRow)
+		}
 		for _, p := range [][2]string{{"KEY", "API_KEY"}, {"TARGETS", "production, preview"}, {"TYPE", "encrypted"}} {
-			want, got := columnOffset(header, p[0]), columnOffset(row, p[1])
+			want, got := columnOffset(header, p[0]), columnOffset(dataRow, p[1])
 			if want < 0 || got < 0 {
 				t.Fatalf("%s / %s not rendered in the row:\n%s", p[0], p[1], m.View())
 			}
