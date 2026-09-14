@@ -293,13 +293,13 @@ func (m Model) logsView() string {
 	if len(m.logs) == 0 {
 		return head + "\n" + dimStyle.Render("waiting for events…") + "\n"
 	}
-	visible := max(m.height-6, 1)
+	visible := m.logViewport()
 	total := len(m.logs)
 	end := total - m.logScroll
 	start := max(end-visible, 0)
 	follow := ""
 	if m.logScroll > 0 {
-		follow = dimStyle.Render(fmt.Sprintf("  scrolled (%d/%d)", m.logScroll, max(total-visible, 0)))
+		follow = dimStyle.Render(fmt.Sprintf("  scrolled (%d/%d)", m.logScroll, m.logMaxScroll()))
 	}
 	count := dimStyle.Render(fmt.Sprintf("  %d lines", total))
 	search := ""

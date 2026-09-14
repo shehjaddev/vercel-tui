@@ -831,6 +831,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil // stale deployment; a newer log load is in flight
 		}
 		m.logs = msg.lines
+		// a refresh can return fewer lines than the offset the user had
+		// scrolled to, which would slice past the end of the new log
+		m.logScroll = clamp(m.logScroll, 0, m.logMaxScroll())
 		m.loading, m.throttled = false, false
 
 	case tokenOkMsg:
@@ -1256,7 +1259,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case modeLogs:
-		maxScroll := max(len(m.logs)-(m.height-6), 0)
+		maxScroll := m.logMaxScroll()
 		switch key {
 		case "esc":
 			m.mode = modeDeployments
@@ -1283,10 +1286,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// logViewport is how many log lines fit on screen at once.
+func (m Model) logViewport() int { return max(m.height-6, 1) }
+
+// logMaxScroll is the largest scroll offset that still shows the first line.
+func (m Model) logMaxScroll() int { return max(len(m.logs)-m.logViewport(), 0) }
+
 // logTopIndex is the absolute index of the topmost visible log line.
 func (m Model) logTopIndex() int {
-	visible := max(m.height-6, 1)
-	start := len(m.logs) - visible - m.logScroll
+	start := len(m.logs) - m.logViewport() - m.logScroll
 	if start < 0 {
 		return 0
 	}
@@ -1300,8 +1308,8 @@ func (m *Model) searchNext() {
 	}
 	q := strings.ToLower(m.search)
 	total := len(m.logs)
-	visible := max(m.height-6, 1)
-	maxScroll := max(total-visible, 0)
+	visible := m.logViewport()
+	maxScroll := m.logMaxScroll()
 	from := m.lastMatch + 1
 	for i := 0; i < total; i++ {
 		idx := (from + i) % total

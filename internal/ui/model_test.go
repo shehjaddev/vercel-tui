@@ -252,3 +252,23 @@ func TestPrefetchStopsWhenNothingNew(t *testing.T) {
 		t.Fatal("enriched head requested again")
 	}
 }
+
+// A refresh can return fewer lines than the scroll offset the user was on;
+// the view must not slice past the end of the new log.
+func TestLogsShrinkClampsScroll(t *testing.T) {
+	m := New(api.New("tok"), true, 0, nil, "", "", ".")
+	m.width, m.height = 80, 24
+	m.mode = modeLogs
+	m.detail = &api.Deployment{UID: "d1", Name: "web"}
+	m.logs = make([]string, 500)
+	m.logScroll = 400
+
+	model, _ := m.Update(logsMsg{id: "d1", lines: []string{"one", "two"}})
+	got := model.(Model)
+	if got.logScroll != 0 {
+		t.Fatalf("logScroll = %d, want 0 after the log shrank", got.logScroll)
+	}
+	if view := got.View(); !strings.Contains(view, "one") {
+		t.Fatalf("shrunken log not rendered:\n%s", view)
+	}
+}
