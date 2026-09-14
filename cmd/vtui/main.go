@@ -30,7 +30,15 @@ func main() {
 	// always wire the refresh: it only fires on 403, and it reads the CLI's
 	// refresh token (absent for VERCEL_TOKEN/--token, where it's a no-op).
 	client.SetRefresh(config.RefreshVercelToken)
-	m := ui.New(client, token != "", *refresh, link, *target, *branch, *dir)
+	m := ui.New(ui.Options{
+		Client:       client,
+		Authed:       token != "",
+		PollInterval: *refresh,
+		Link:         link,
+		Target:       *target,
+		Branch:       *branch,
+		Dir:          *dir,
+	})
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)

@@ -59,9 +59,9 @@ var targetPresets = []targetPreset{
 }
 
 type Model struct {
-	client  *api.Client
-	authed  bool
-	refresh time.Duration
+	client       *api.Client
+	authed       bool
+	pollInterval time.Duration
 
 	projectID, orgID       string
 	targetFlag, branchFlag string
@@ -172,26 +172,39 @@ const (
 	pendDeleteEnv
 )
 
-func New(client *api.Client, authed bool, refresh time.Duration, link *config.ProjectLink, target, branch, dir string) Model {
+// Options is everything the model needs to start: the client, and the scope
+// and filters the command line asked for.
+type Options struct {
+	Client       *api.Client
+	Authed       bool
+	PollInterval time.Duration // 0 disables polling
+	Link         *config.ProjectLink
+	Target       string // filter deployments by target
+	Branch       string // filter deployments by branch
+	Dir          string // directory holding .vercel/project.json
+}
+
+func New(opts Options) Model {
+	mode := modeDeployments
+	if !opts.Authed {
+		mode = modeLogin
+	}
+	dir := opts.Dir
+	if dir == "" {
+		dir = "."
+	}
 	m := Model{
-		client:     client,
-		authed:     authed,
-		refresh:    refresh,
-		targetFlag: target,
-		branchFlag: branch,
-		dir:        dir,
-		mode:       modeDeployments,
+		client:       opts.Client,
+		authed:       opts.Authed,
+		pollInterval: opts.PollInterval,
+		targetFlag:   opts.Target,
+		branchFlag:   opts.Branch,
+		dir:          dir,
+		mode:         mode,
+		grouped:      true, // one row per project, expandable
 	}
-	if m.dir == "" {
-		m.dir = "."
-	}
-	if link != nil {
-		m.projectID = link.ProjectID
-		m.orgID = link.OrgID
-	}
-	m.grouped = true
-	if !authed {
-		m.mode = modeLogin
+	if opts.Link != nil {
+		m.projectID, m.orgID = opts.Link.ProjectID, opts.Link.OrgID
 	}
 	m.loadCtx, m.loadCancel = context.WithCancel(context.Background())
 	return m
@@ -798,15 +811,15 @@ func (m Model) nextInterval() time.Duration {
 	if m.mode == modeLogs {
 		return liveLogPoll
 	}
-	if m.refresh == 0 {
+	if m.pollInterval == 0 {
 		return 0
 	}
 	for _, d := range m.deps {
 		if d.CanCancel() { // a build is in progress: poll faster
-			return min(m.refresh, buildingPoll)
+			return min(m.pollInterval, buildingPoll)
 		}
 	}
-	return m.refresh
+	return m.pollInterval
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

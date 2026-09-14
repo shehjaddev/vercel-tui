@@ -30,7 +30,7 @@ func TestRedeployTargetNormalization(t *testing.T) {
 }
 
 func TestTeamsMsgSelectsLinkedTeam(t *testing.T) {
-	m := New(api.New("tok"), true, 0, nil, "", "", ".")
+	m := New(Options{Client: api.New("tok"), Authed: true})
 	m.orgID, m.projectID = "team_2", "prj_1"
 	model, _ := m.Update(teamsMsg{user: "u", teams: []api.Team{{ID: "team_1", Name: "one"}, {ID: "team_2", Name: "two"}}})
 	got := model.(Model)
@@ -41,7 +41,7 @@ func TestTeamsMsgSelectsLinkedTeam(t *testing.T) {
 
 func TestTeamSwitchClearsForeignScope(t *testing.T) {
 	newScoped := func() Model {
-		m := New(api.New("tok"), true, 0, nil, "", "", ".")
+		m := New(Options{Client: api.New("tok"), Authed: true})
 		m.teams = []api.Team{{Name: "u (personal)"}, {ID: "team_1", Name: "one"}, {ID: "team_2", Name: "two"}}
 		m.teamIdx = 1
 		m.orgID, m.projectID = "team_1", "prj_1"
@@ -67,7 +67,7 @@ func TestTeamSwitchClearsForeignScope(t *testing.T) {
 }
 
 func TestStaleDepsMsgDropped(t *testing.T) {
-	m := New(api.New("tok"), true, 0, nil, "", "", ".")
+	m := New(Options{Client: api.New("tok"), Authed: true})
 	m.projectID = "prj_1"
 	deps := []api.Deployment{{UID: "dpl_1", Name: "web"}}
 	model, _ := m.Update(depsMsg{deps: deps, team: "other", project: "prj_1"})
@@ -81,7 +81,7 @@ func TestStaleDepsMsgDropped(t *testing.T) {
 }
 
 func TestStaleLogsMsgDropped(t *testing.T) {
-	m := New(api.New("tok"), true, 0, nil, "", "", ".")
+	m := New(Options{Client: api.New("tok"), Authed: true})
 	m.detail = &api.Deployment{UID: "dpl_1", Name: "web"}
 	model, _ := m.Update(logsMsg{lines: []string{"old"}, id: "dpl_2"})
 	if got := model.(Model); len(got.logs) != 0 {
@@ -94,8 +94,7 @@ func TestStaleLogsMsgDropped(t *testing.T) {
 }
 
 func TestRefreshSetsLoading(t *testing.T) {
-	m := New(api.New("tok"), true, 0, nil, "", "", ".")
-	m.width, m.height = 80, 24
+	m := newTestModel()
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
 	if got := model.(Model); !got.loading {
 		t.Fatalf("loading not set on manual refresh")
@@ -103,7 +102,7 @@ func TestRefreshSetsLoading(t *testing.T) {
 }
 
 func TestLoginEnterValidates(t *testing.T) {
-	m := New(api.New("tok"), false, 0, nil, "", "", ".")
+	m := New(Options{Client: api.New("tok")})
 	m.tokenBuf = "abc"
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	got := model.(Model)
@@ -117,8 +116,7 @@ func TestLoginEnterValidates(t *testing.T) {
 
 // Regression for BUG-1: typed-confirm dialogs must collect keystrokes.
 func TestConfirmDialogCollectsTyping(t *testing.T) {
-	m := New(api.New("tok"), true, 0, nil, "", "", ".")
-	m.width, m.height = 80, 24
+	m := newTestModel()
 	m.pending, m.pendingDep = pendDelete, api.Deployment{Name: "web", UID: "dpl_1"}
 	for _, k := range strings.Split("we", "") {
 		model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)})
@@ -145,8 +143,7 @@ func TestConfirmDialogCollectsTyping(t *testing.T) {
 // Regression for BUG-2: enter on a deployment opens the actions menu,
 // not a detail view.
 func TestEnterOpensActions(t *testing.T) {
-	m := New(api.New("tok"), true, 0, nil, "", "", ".")
-	m.width, m.height = 80, 24
+	m := newTestModel()
 	m.mode = modeDeployments
 	m.deps = []api.Deployment{{Name: "web", UID: "dpl_1", URL: "web.vercel.sh", State: "READY", Target: "production"}}
 	m.depCursor = 0
@@ -162,7 +159,7 @@ func TestEnterOpensActions(t *testing.T) {
 
 // The top detail block must surface aliases from the enriched detail.
 func TestAliasInTopDetail(t *testing.T) {
-	m := New(api.New("tok"), true, 0, nil, "", "", ".")
+	m := New(Options{Client: api.New("tok"), Authed: true})
 	m.width = 168
 	m.deps = []api.Deployment{{
 		UID: "dpl_1", Name: "shehjad", State: "READY", Target: "production",
@@ -196,7 +193,7 @@ func TestUnlinkClearsScopeAndFile(t *testing.T) {
 	if err := os.WriteFile(link, []byte(`{"projectId":"prj_x","orgId":"org_y"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m := New(api.New("tok"), true, 0, nil, "", "", dir)
+	m := New(Options{Client: api.New("tok"), Authed: true, Dir: dir})
 	m.projectID, m.orgID = "prj_x", "org_y"
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'U'}})
 	got := model.(Model)
@@ -214,7 +211,7 @@ func TestUnlinkClearsScopeAndFile(t *testing.T) {
 func TestPrefetchStopsWhenNothingNew(t *testing.T) {
 	head := api.Deployment{UID: "d1", Name: "web", State: "READY"}
 	newModel := func() Model {
-		m := New(api.New("tok"), true, 0, nil, "", "", ".")
+		m := New(Options{Client: api.New("tok"), Authed: true})
 		m.width, m.height = 80, 24
 		m.deps = []api.Deployment{head}
 		return m
@@ -259,8 +256,7 @@ func TestPrefetchStopsWhenNothingNew(t *testing.T) {
 // A refresh can return fewer lines than the scroll offset the user was on;
 // the view must not slice past the end of the new log.
 func TestLogsShrinkClampsScroll(t *testing.T) {
-	m := New(api.New("tok"), true, 0, nil, "", "", ".")
-	m.width, m.height = 80, 24
+	m := newTestModel()
 	m.mode = modeLogs
 	m.detail = &api.Deployment{UID: "d1", Name: "web"}
 	m.logs = make([]string, 500)
@@ -279,8 +275,7 @@ func TestLogsShrinkClampsScroll(t *testing.T) {
 // Editing a value must not rewrite targets the user never chose: a variable
 // on production and preview kept coming back on production alone.
 func TestEnvEditKeepsStoredTargets(t *testing.T) {
-	m := New(api.New("tok"), true, 0, nil, "", "", ".")
-	m.width, m.height = 80, 24
+	m := newTestModel()
 	m.mode = modeEnvs
 	m.envProject = api.Project{Name: "web", ID: "prj_1"}
 	m.envs = []api.EnvVar{{
@@ -311,13 +306,13 @@ func TestEnvEditKeepsStoredTargets(t *testing.T) {
 // ctrl+c: no mode could be left except with esc and a quit was unreachable.
 func TestCtrlCQuitsFromEveryInputMode(t *testing.T) {
 	base := func() Model {
-		m := New(api.New("tok"), true, 0, nil, "", "", ".")
+		m := New(Options{Client: api.New("tok"), Authed: true})
 		m.width, m.height = 80, 24
 		return m
 	}
 	cases := map[string]func() Model{
 		"deployments":    func() Model { return base() },
-		"login":          func() Model { return New(api.New("tok"), false, 0, nil, "", "", ".") },
+		"login":          func() Model { return New(Options{Client: api.New("tok")}) },
 		"confirm dialog": func() Model { m := base(); m.pending = pendDelete; return m },
 		"list filter":    func() Model { m := base(); m.filterFocus = true; return m },
 		"log search":     func() Model { m := base(); m.searchFocus = true; return m },
@@ -347,7 +342,7 @@ func TestTypedInputReachesEveryField(t *testing.T) {
 		build func() Model
 		read  func(Model) string
 	}{
-		{"login", func() Model { return New(api.New("tok"), false, 0, nil, "", "", ".") },
+		{"login", func() Model { return New(Options{Client: api.New("tok")}) },
 			func(m Model) string { return m.tokenBuf }},
 		{"list filter", func() Model { m := newTestModel(); m.filterFocus = true; return m },
 			func(m Model) string { return m.filterBuf }},
@@ -379,7 +374,7 @@ func TestTypedInputReachesEveryField(t *testing.T) {
 // newTestModel is a model wired to a throwaway client, sized so the list and
 // log views have room to lay out.
 func newTestModel() Model {
-	m := New(api.New("tok"), true, 0, nil, "", "", ".")
+	m := New(Options{Client: api.New("tok"), Authed: true})
 	m.width, m.height = 80, 24
 	return m
 }
