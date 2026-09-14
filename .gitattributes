@@ -1,0 +1,4 @@
+# Go sources: keep LF in the repository and in every checkout, on every OS.
+# core.autocrlf rewrites them to CRLF on Windows otherwise, which makes
+# gofmt -l fail on files nobody edited.
+* text=auto eol=lf

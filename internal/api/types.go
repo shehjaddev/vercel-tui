@@ -26,8 +26,8 @@ type Deployment struct {
 	Creator    struct {
 		Username string `json:"username"`
 	} `json:"creator"`
-	Meta  StringMap         `json:"meta"`
-	Alias []string          `json:"alias"`
+	Meta  StringMap `json:"meta"`
+	Alias []string  `json:"alias"`
 	// project is carried by the detail response; list items leave it empty.
 	Project Project `json:"project"`
 }
