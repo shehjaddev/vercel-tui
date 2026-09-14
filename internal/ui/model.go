@@ -689,68 +689,76 @@ func (m Model) runAction(pa pendingAction, dep api.Deployment) tea.Cmd {
 	return nil
 }
 
-// actionItem is one entry in the deployment actions menu.
-type actionItem struct {
+// deploymentAction is one thing you can do to a deployment. The menu, the
+// list's own keybindings and the footer hints all read this table, so a key's
+// name and the conditions it needs cannot drift apart.
+type deploymentAction struct {
 	key   string
 	label string
+	hint  string                               // footer wording, for actions that come and go
+	pend  pendingAction                        // set when the action asks for confirmation
+	run   func(*Model, api.Deployment) tea.Cmd // set when it runs straight away
+	needs func(api.Deployment) bool
 }
 
-// deploymentActions lists the actions available for the selected deployment.
-func (m Model) deploymentActions() []actionItem {
-	d := m.detail
-	if d == nil {
-		return nil
-	}
-	actions := []actionItem{
-		{"l", "View logs"},
-		{"R", "Redeploy same commit"},
-		{"c", "Copy URL"},
-		{"o", "Open in browser"},
-	}
-	if d.Status() == "building" {
-		actions = append(actions, actionItem{"x", "Cancel build"})
-	}
-	if d.Status() == "ready" && d.Target == "production" {
-		actions = append(actions, actionItem{"B", "Rollback to production"})
-	}
-	// delete is always available but last (destructive)
-	actions = append(actions, actionItem{"D", "Delete deployment"})
-	return actions
+var deploymentActions = []deploymentAction{
+	{
+		key: "l", label: "View logs", hint: "logs",
+		run: func(m *Model, d api.Deployment) tea.Cmd {
+			m.detail = &d
+			m.logs, m.logScroll = nil, 0
+			m.mode = modeLogs
+			return m.fetchLogs()
+		},
+	},
+	{key: "R", label: "Redeploy same commit", pend: pendRedeploy},
+	{
+		key: "c", label: "Copy URL", hint: "copy",
+		run: func(_ *Model, d api.Deployment) tea.Cmd { return copyURL("https://" + d.URL) },
+	},
+	{
+		key: "o", label: "Open in browser", hint: "open",
+		run: func(_ *Model, d api.Deployment) tea.Cmd { return openBrowser("https://" + d.URL) },
+	},
+	{key: "x", label: "Cancel build", hint: "cancel", pend: pendCancel, needs: api.Deployment.CanCancel},
+	{key: "B", label: "Rollback to production", hint: "rollback", pend: pendRollback, needs: api.Deployment.CanRollback},
+	{key: "D", label: "Delete deployment", pend: pendDelete}, // always last: destructive
 }
 
-// runActionByKey invokes an action by its keybinding.
-func (m Model) runActionByKey(key string) (tea.Model, tea.Cmd) {
-	d := m.detail
-	if d == nil {
-		m.mode = modeDeployments
-		return m, nil
+// actionsFor lists the actions a deployment can take right now.
+func actionsFor(d api.Deployment) []deploymentAction {
+	var out []deploymentAction
+	for _, a := range deploymentActions {
+		if a.needs == nil || a.needs(d) {
+			out = append(out, a)
+		}
 	}
-	m.mode = modeDeployments // leave the action overlay
-	switch key {
-	case "l":
-		m.logs, m.logScroll = nil, 0
-		m.mode = modeLogs
-		cmd := m.fetchLogs()
-		return m, cmd
-	case "o":
-		return m, openBrowser("https://" + d.URL)
-	case "c":
-		return m, copyURL("https://" + d.URL)
-	case "x":
-		if d.Status() == "building" {
-			m.pending, m.pendingDep, m.confirmInput = pendCancel, *d, ""
+	return out
+}
+
+// ask opens the confirmation dialog for a destructive action.
+func (m *Model) ask(pa pendingAction, dep api.Deployment) {
+	m.pending, m.pendingDep, m.confirmInput = pa, dep, ""
+}
+
+// runActionKey runs the action bound to key against dep, leaving whatever menu
+// the key came from. An action the deployment cannot take does nothing.
+func (m Model) runActionKey(key string, dep api.Deployment) (tea.Model, tea.Cmd) {
+	for _, a := range deploymentActions {
+		if a.key != key {
+			continue
 		}
-		return m, nil
-	case "R":
-		m.pending, m.pendingDep, m.confirmInput = pendRedeploy, *d, ""
-		return m, nil
-	case "B":
-		if d.Status() == "ready" && d.Target == "production" {
-			m.pending, m.pendingDep, m.confirmInput = pendRollback, *d, ""
+		if a.needs != nil && !a.needs(dep) {
+			return m, nil
 		}
-		return m, nil
-	case "D":
-		m.pending, m.pendingDep, m.confirmInput = pendDelete, *d, ""
+		m.mode = modeDeployments // leave the action overlay
+		if a.pend != pendNone {
+			m.ask(a.pend, dep)
+			return m, nil
+		}
+		if a.run != nil {
+			return m, a.run(&m, dep)
+		}
 		return m, nil
 	}
 	return m, nil
@@ -776,7 +784,7 @@ func (m Model) nextInterval() time.Duration {
 		return 0
 	}
 	for _, d := range m.deps {
-		if d.Status() == "building" {
+		if d.CanCancel() { // a build is in progress: poll faster
 			return min(m.refresh, 2*time.Second)
 		}
 	}
@@ -1264,37 +1272,9 @@ func (m Model) handleDeploymentsKey(key string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.unlinkCmd()
-	case "x":
-		if d := m.selectedDep(); d != nil && d.Status() == "building" {
-			m.pending, m.pendingDep, m.confirmInput = pendCancel, *d, ""
-		}
-	case "D":
+	case "l", "R", "c", "o", "x", "B", "D":
 		if d := m.selectedDep(); d != nil {
-			m.pending, m.pendingDep, m.confirmInput = pendDelete, *d, ""
-		}
-	case "R":
-		if d := m.selectedDep(); d != nil {
-			m.pending, m.pendingDep, m.confirmInput = pendRedeploy, *d, ""
-		}
-	case "B":
-		if d := m.selectedDep(); d != nil && d.Status() == "ready" && d.Target == "production" {
-			m.pending, m.pendingDep, m.confirmInput = pendRollback, *d, ""
-		}
-	case "l":
-		if d := m.selectedDep(); d != nil {
-			m.detail = d
-			m.logs, m.logScroll = nil, 0
-			m.mode = modeLogs
-			cmd := m.fetchLogs()
-			return m, cmd
-		}
-	case "o":
-		if d := m.selectedDep(); d != nil {
-			return m, openBrowser("https://" + d.URL)
-		}
-	case "c":
-		if d := m.selectedDep(); d != nil {
-			return m, copyURL("https://" + d.URL)
+			return m.runActionKey(key, *d)
 		}
 	}
 	return m, nil
@@ -1306,7 +1286,7 @@ func (m Model) handleActionsKey(key string) (tea.Model, tea.Cmd) {
 		m.mode = modeDeployments
 		return m, nil
 	}
-	actions := m.deploymentActions()
+	actions := actionsFor(*m.detail)
 	switch key {
 	case "esc":
 		m.mode = modeDeployments
@@ -1320,7 +1300,7 @@ func (m Model) handleActionsKey(key string) (tea.Model, tea.Cmd) {
 		m.actionCursor = len(actions) - 1
 	case "enter":
 		if m.actionCursor < len(actions) {
-			return m.runActionByKey(actions[m.actionCursor].key)
+			return m.runActionKey(actions[m.actionCursor].key, *m.detail)
 		}
 	}
 	return m, nil

@@ -270,7 +270,7 @@ func (m Model) actionsView() string {
 	if d == nil {
 		return ""
 	}
-	actions := m.deploymentActions()
+	actions := actionsFor(*d)
 	var out strings.Builder
 	out.WriteString(titleStyle.Render("Actions — "+d.Name) + "\n\n")
 	for i, a := range actions {
@@ -492,15 +492,12 @@ func (m Model) footer() string {
 	}
 	modeLogsHints := "j/k scroll · / search · n next match · c copy url · esc back · q quit"
 	hint := hints[m.mode]
-	// context-dependent actions only advertise when they can fire
-	addHint := func(k, label string) { hint += " · " + k + " " + label }
-	d := m.selectedDep()
-	if (m.mode == modeDeployments || m.mode == modeActions) && d != nil {
-		if d.Status() == "building" {
-			addHint("x", "cancel")
-		}
-		if d.Status() == "ready" && d.Target == "production" {
-			addHint("B", "rollback")
+	// actions that come and go advertise themselves only when they can fire
+	if d := m.selectedDep(); d != nil && (m.mode == modeDeployments || m.mode == modeActions) {
+		for _, a := range actionsFor(*d) {
+			if a.hint != "" && a.needs != nil {
+				hint += " · " + a.key + " " + a.hint
+			}
 		}
 	}
 	line := dimStyle.Render(hint)

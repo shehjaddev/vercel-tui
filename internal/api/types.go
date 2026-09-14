@@ -63,6 +63,13 @@ func (d Deployment) ShortSHA() string {
 
 func (d Deployment) Message() string { return d.Meta["githubCommitMessage"] }
 
+// CanCancel reports whether the build is still running, so cancel applies.
+func (d Deployment) CanCancel() bool { return d.Status() == "building" }
+
+// CanRollback reports whether promoting this deployment would actually move
+// production traffic.
+func (d Deployment) CanRollback() bool { return d.Status() == "ready" && d.Target == "production" }
+
 // Repo returns the linked git repository as "owner/repo", matching the
 // Projects view, across the Git providers Vercel supports.
 func (d Deployment) Repo() string {

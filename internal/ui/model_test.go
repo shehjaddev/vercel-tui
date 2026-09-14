@@ -444,3 +444,52 @@ func TestNavigationUsesCachedDetail(t *testing.T) {
 		t.Fatalf("detail = %+v, want the cached d1", got.detail)
 	}
 }
+
+// The menu and the list's own keys share one table, so what the menu offers
+// and what a key is allowed to do have to agree.
+func TestActionsOfferedMatchAvailability(t *testing.T) {
+	cases := []struct {
+		name string
+		dep  api.Deployment
+		want string
+	}{
+		{"building", api.Deployment{State: "BUILDING", Target: "preview"}, "l,R,c,o,x,D"},
+		{"ready in production", api.Deployment{State: "READY", Target: "production"}, "l,R,c,o,B,D"},
+		{"ready in preview", api.Deployment{State: "READY", Target: "preview"}, "l,R,c,o,D"},
+	}
+	for _, tc := range cases {
+		var keys []string
+		for _, a := range actionsFor(tc.dep) {
+			keys = append(keys, a.key)
+		}
+		if got := strings.Join(keys, ","); got != tc.want {
+			t.Errorf("%s: actions = %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}
+
+// An action the deployment cannot take must do nothing, from the list or from
+// the menu: no confirmation dialog for something that would fail.
+func TestUnavailableActionAsksNothing(t *testing.T) {
+	cases := []struct {
+		name string
+		dep  api.Deployment
+		key  rune
+		want pendingAction
+	}{
+		{"rollback from preview", api.Deployment{UID: "d1", Name: "web", State: "READY", Target: "preview"}, 'B', pendNone},
+		{"rollback from production", api.Deployment{UID: "d1", Name: "web", State: "READY", Target: "production"}, 'B', pendRollback},
+		{"cancel a finished build", api.Deployment{UID: "d1", Name: "web", State: "READY", Target: "preview"}, 'x', pendNone},
+		{"cancel a running build", api.Deployment{UID: "d1", Name: "web", State: "BUILDING", Target: "preview"}, 'x', pendCancel},
+		{"delete", api.Deployment{UID: "d1", Name: "web", State: "READY", Target: "preview"}, 'D', pendDelete},
+		{"redeploy", api.Deployment{UID: "d1", Name: "web", State: "READY", Target: "preview"}, 'R', pendRedeploy},
+	}
+	for _, tc := range cases {
+		m := newTestModel()
+		m.deps = []api.Deployment{tc.dep}
+		model, _ := m.Update(key(tc.key))
+		if got := model.(Model); got.pending != tc.want {
+			t.Errorf("%s: pending = %v, want %v", tc.name, got.pending, tc.want)
+		}
+	}
+}
