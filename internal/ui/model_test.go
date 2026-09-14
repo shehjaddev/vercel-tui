@@ -204,3 +204,51 @@ func TestUnlinkClearsScopeAndFile(t *testing.T) {
 		t.Fatalf("link file should be removed: %v", err)
 	}
 }
+
+// The enrichment chains run in the background for every project on the
+// board: a batch that makes no progress must end the chain instead of
+// asking the API for the same thing on every refresh.
+func TestPrefetchStopsWhenNothingNew(t *testing.T) {
+	head := api.Deployment{UID: "d1", Name: "web", State: "READY"}
+	newModel := func() Model {
+		m := New(api.New("tok"), true, 0, nil, "", "", ".")
+		m.width, m.height = 80, 24
+		m.deps = []api.Deployment{head}
+		return m
+	}
+
+	// a project with no domains is answered, not retried
+	m := newModel()
+	m.detailCache = map[string]api.Deployment{"d1": {UID: "d1", Project: api.Project{ID: "prj_1"}}}
+	if cmd := m.fetchNextDomains(); cmd == nil {
+		t.Fatal("first domain batch should fetch")
+	}
+	model, cmd := m.Update(projDomainsMsg{domains: map[string][]string{"prj_1": {}}})
+	if cmd != nil {
+		t.Fatal("domain chain kept running after the project was answered")
+	}
+	if names, ok := model.(Model).domainCache["prj_1"]; !ok || len(names) != 0 {
+		t.Fatalf("empty domain list not cached: %v", model.(Model).domainCache)
+	}
+
+	// a failed enrichment is spent too, so it is not retried every refresh
+	m = newModel()
+	if cmd := m.fetchNextHeads(); cmd == nil {
+		t.Fatal("first head batch should fetch")
+	}
+	model, cmd = m.Update(detailsMsg{byKey: map[string]api.Deployment{}, tried: []string{"d1"}})
+	if cmd != nil {
+		t.Fatal("head chain kept running after a failed enrichment")
+	}
+	if cmd := model.(Model).fetchNextHeads(); cmd != nil {
+		t.Fatal("failed head requested again")
+	}
+
+	// and an enriched head is not requested twice
+	model, _ = newModel().Update(detailsMsg{byKey: map[string]api.Deployment{
+		"d1": {UID: "d1", Project: api.Project{ID: "prj_1"}},
+	}})
+	if cmd := model.(Model).fetchNextHeads(); cmd != nil {
+		t.Fatal("enriched head requested again")
+	}
+}

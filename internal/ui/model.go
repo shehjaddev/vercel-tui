@@ -60,6 +60,7 @@ type Model struct {
 	expanded     string // project name currently expanded ("" = none)
 	detail       *api.Deployment
 	detailCache  map[string]api.Deployment // enriched detail by deployment key
+	detailTried  map[string]bool           // keys whose enrichment was attempted
 	domainCache  map[string][]string       // project domains by project id
 	logs         []string
 	logScroll    int // lines back from the bottom; 0 means following
@@ -118,7 +119,10 @@ type depsMsg struct {
 	team, project string
 }
 type detailMsg struct{ d *api.Deployment }
-type detailsMsg struct{ byKey map[string]api.Deployment }
+type detailsMsg struct {
+	byKey map[string]api.Deployment
+	tried []string // keys the batch attempted, including the ones that failed
+}
 type logsMsg struct {
 	lines []string
 	id    string
@@ -293,11 +297,13 @@ func (m Model) fetchProjectDomains(projectID string) tea.Cmd {
 	}
 }
 
-// fetchNextDomains prefetches project domains in lockstep with the alias
+// fetchNextDomains prefetches project domains in lockstep with the detail
 // prefetch: for each project head whose enriched detail we already hold, it
 // fetches up to 3 uncached project domains per batch and chains to the next
 // batch (the chain delay between batches keeps us under the rate limit).
-// Every project is fetched once and cached, so navigation never re-requests.
+// The batch records an entry for every project it attempts — empty for a
+// project with no domains, and empty for a request that failed — so the
+// candidates only ever shrink and the chain always ends.
 func (m Model) fetchNextDomains() tea.Cmd {
 	ctx, c, team := m.scopeCtx(), m.client, m.teamID()
 	var pids []string
@@ -309,7 +315,10 @@ func (m Model) fetchNextDomains() tea.Cmd {
 		if cached, ok := m.detailCache[g.deployments[0].Key()]; ok {
 			pid = cached.Project.ID
 		}
-		if pid == "" || m.domainCache[pid] != nil {
+		if pid == "" {
+			continue
+		}
+		if _, done := m.domainCache[pid]; done {
 			continue
 		}
 		pids = append(pids, pid)
@@ -321,48 +330,59 @@ func (m Model) fetchNextDomains() tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		domains := map[string][]string{}
+		domains := make(map[string][]string, len(pids))
 		for _, pid := range pids {
+			names := []string{}
 			if ds, err := c.ProjectDomains(ctx, pid, team); err == nil {
 				for _, d := range ds {
-					domains[pid] = append(domains[pid], d.Name)
+					names = append(names, d.Name)
 				}
 			}
+			domains[pid] = names
 		}
 		return projDomainsMsg{domains: domains}
 	}
 }
 
 // fetchNextHeads enriches up to 3 uncached project heads per batch,
-// returning them in one message so aliases appear after each batch rather
-// than at the very end. Chains to the next 3 on arrival.
+// returning them in one message so the board fills in batch by batch rather
+// than all at once at the end. Chains to the next 3 on arrival, and reports
+// every head it attempted so a failing one is dropped instead of being
+// requested again on every refresh.
 func (m Model) fetchNextHeads() tea.Cmd {
 	ctx, c, team := m.scopeCtx(), m.client, m.teamID()
 	var heads []api.Deployment
 	for _, g := range m.projectGroups() {
-		if len(g.deployments) > 0 {
-			d := g.deployments[0]
-			if _, ok := m.detailCache[d.Key()]; !ok {
-				heads = append(heads, d)
-				if len(heads) >= 3 {
-					break
-				}
-			}
+		if len(g.deployments) == 0 {
+			continue
+		}
+		d := g.deployments[0]
+		if _, ok := m.detailCache[d.Key()]; ok {
+			continue
+		}
+		if m.detailTried[d.Key()] {
+			continue
+		}
+		heads = append(heads, d)
+		if len(heads) >= 3 {
+			break
 		}
 	}
 	if len(heads) == 0 {
 		return nil
 	}
 	return func() tea.Msg {
-		byKey := map[string]api.Deployment{}
+		byKey := make(map[string]api.Deployment, len(heads))
+		tried := make([]string, 0, len(heads))
 		for _, d := range heads {
+			tried = append(tried, d.Key())
 			full, err := c.Deployment(ctx, d.Key(), team)
 			if err != nil {
 				continue
 			}
 			byKey[d.Key()] = *full
 		}
-		return detailsMsg{byKey: byKey}
+		return detailsMsg{byKey: byKey, tried: tried}
 	}
 }
 
@@ -747,8 +767,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.detailCache == nil {
 			m.detailCache = map[string]api.Deployment{}
 		}
+		if m.detailTried == nil {
+			m.detailTried = map[string]bool{}
+		}
 		for k, d := range msg.byKey {
 			m.detailCache[k] = d
+		}
+		// successful and failed attempts are both spent; only a fresh list
+		// brings a new deployment key to try
+		for k := range msg.byKey {
+			m.detailTried[k] = true
+		}
+		for _, k := range msg.tried {
+			m.detailTried[k] = true
 		}
 		// keep m.detail pointing at the selected deployment's enriched data
 		if m.mode == modeDeployments {
