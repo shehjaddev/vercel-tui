@@ -79,17 +79,34 @@ type ProjectLink struct {
 }
 
 // WriteProjectLink writes .vercel/project.json so the official CLI and vtui
-// both pick up the same project/team scoping.
+// both pick up the same project/team scoping. The file belongs to the CLI
+// too, so any field we don't own is left as it is. An empty orgID means the
+// personal account: the key is dropped rather than written empty, which the
+// CLI would read as a malformed org.
 func WriteProjectLink(dir, projectID, orgID string) error {
 	dir = filepath.Join(dir, ".vercel")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(map[string]string{"projectId": projectID, "orgId": orgID}, "", "  ")
+	path := filepath.Join(dir, "project.json")
+	fields := map[string]any{}
+	if b, err := os.ReadFile(path); err == nil {
+		var existing map[string]any
+		if json.Unmarshal(b, &existing) == nil {
+			fields = existing
+		}
+	}
+	fields["projectId"] = projectID
+	if orgID == "" {
+		delete(fields, "orgId")
+	} else {
+		fields["orgId"] = orgID
+	}
+	data, err := json.MarshalIndent(fields, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "project.json"), data, 0o644)
+	return os.WriteFile(path, data, 0o644)
 }
 
 func LoadProjectLink(dir string) (*ProjectLink, error) {
