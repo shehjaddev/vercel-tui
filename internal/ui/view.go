@@ -362,11 +362,19 @@ func (m Model) envFormView() string {
 	}, "\n") + "\n"
 }
 
-func (m Model) envKeyLabel() string {
+// envByID is the variable the form is editing, if the list still holds it.
+func (m Model) envByID(id string) (api.EnvVar, bool) {
 	for _, e := range m.envs {
-		if e.ID == m.envEditID {
-			return e.Key
+		if e.ID == id {
+			return e, true
 		}
+	}
+	return api.EnvVar{}, false
+}
+
+func (m Model) envKeyLabel() string {
+	if e, ok := m.envByID(m.envEditID); ok {
+		return e.Key
 	}
 	return "?"
 }
@@ -385,12 +393,8 @@ func (m Model) envTargetsLabel() string {
 
 // envTargets returns the stored targets of the variable being edited.
 func (m Model) envTargets() []string {
-	for _, e := range m.envs {
-		if e.ID == m.envEditID {
-			return e.Target
-		}
-	}
-	return nil
+	e, _ := m.envByID(m.envEditID)
+	return e.Target
 }
 
 func (m Model) loginView() string {

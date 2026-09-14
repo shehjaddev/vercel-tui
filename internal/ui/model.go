@@ -210,6 +210,20 @@ func New(opts Options) Model {
 	return m
 }
 
+// recordErr files an error for the footer, and reports false when it is only a
+// load the user superseded by switching scope.
+func (m *Model) recordErr(err error) bool {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return false
+	case errors.Is(err, api.ErrThrottled):
+		m.throttled = true
+	default:
+		m.err = err.Error()
+	}
+	return true
+}
+
 // scopeCtx returns the context for loads in the current team/scope.
 func (m Model) scopeCtx() context.Context {
 	if m.loadCtx == nil {
@@ -974,16 +988,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actionMsg:
 		m.loading = false
 		if msg.err != nil {
-			if errors.Is(msg.err, context.Canceled) {
+			if !m.recordErr(msg.err) {
 				return m, nil // superseded by a scope switch; tick refreshes
 			}
-			if errors.Is(msg.err, api.ErrThrottled) {
-				m.throttled = true
-			} else {
-				m.err = msg.err.Error()
-			}
-			retryCmd := m.loadCurrent()
-			return m, retryCmd
+			return m, m.loadCurrent() // a failed action leaves the view to reload
 		}
 		m.note, m.noteAt = msg.text, time.Now()
 		if !msg.reload {
@@ -994,14 +1002,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case errMsg:
 		m.loading = false
-		if errors.Is(msg.err, context.Canceled) {
-			break // superseded by a scope switch; tick refreshes
-		}
-		if errors.Is(msg.err, api.ErrThrottled) {
-			m.throttled = true
-		} else {
-			m.err = msg.err.Error()
-		}
+		m.recordErr(msg.err) // a superseded load is dropped, not shown
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)

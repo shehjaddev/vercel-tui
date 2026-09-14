@@ -123,6 +123,14 @@ func (d Deployment) Duration() time.Duration {
 	return time.Duration(d.ReadyMs()-start) * time.Millisecond
 }
 
+// GitSource identifies a git-connected repo for redeployments.
+type GitSource struct {
+	Type string `json:"type"`
+	Org  string `json:"org"`
+	Repo string `json:"repo"`
+	Ref  string `json:"ref"`
+}
+
 // StringMap tolerates the mixed shapes the API has been seen to emit for
 // string maps: strings stay as-is, numbers and bools become their text
 // form, and anything else is kept as compact JSON.

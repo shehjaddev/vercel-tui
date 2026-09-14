@@ -20,14 +20,6 @@ func (c *Client) DeleteDeployment(ctx context.Context, id, teamID string) error 
 	return c.request(ctx, "DELETE", "/v13/deployments/"+id, scoped(url.Values{}, teamID), nil, nil)
 }
 
-// GitSource identifies a git-connected repo for redeployments.
-type GitSource struct {
-	Type string `json:"type"`
-	Org  string `json:"org"`
-	Repo string `json:"repo"`
-	Ref  string `json:"ref"`
-}
-
 // Redeploy rebuilds the same git commit as an existing deployment.
 // Git-connected projects require the full gitSource; pass nil for
 // deployments without git metadata. Pass target="production" to keep

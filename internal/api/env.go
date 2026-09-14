@@ -50,19 +50,3 @@ func (c *Client) UpdateEnvValue(ctx context.Context, projectID, teamID, envID, v
 func (c *Client) DeleteEnv(ctx context.Context, projectID, teamID, envID string) error {
 	return c.request(ctx, "DELETE", "/v10/projects/"+projectID+"/env/"+envID, scoped(url.Values{}, teamID), nil, nil)
 }
-
-type Domain struct {
-	Name      string `json:"name"`
-	Verified  bool   `json:"verified"`
-	CreatedAt msTime `json:"createdAt"`
-}
-
-func (c *Client) ProjectDomains(ctx context.Context, projectID, teamID string) ([]Domain, error) {
-	var out struct {
-		Domains []Domain `json:"domains"`
-	}
-	if err := c.get(ctx, "/v9/projects/"+projectID+"/domains", scoped(url.Values{}, teamID), &out); err != nil {
-		return nil, err
-	}
-	return out.Domains, nil
-}
