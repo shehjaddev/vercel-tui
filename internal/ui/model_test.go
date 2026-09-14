@@ -634,3 +634,27 @@ func TestTableColumnsLineUp(t *testing.T) {
 		}
 	})
 }
+
+// ? opens the key list, the next key closes it without also running, and q
+// only quits once the overlay is out of the way.
+func TestHelpOverlayOpensAndCloses(t *testing.T) {
+	m := newTestModel()
+	model, _ := m.Update(key('?'))
+	m = model.(Model)
+	if !m.help {
+		t.Fatal("? did not open the help overlay")
+	}
+	if view := m.View(); !strings.Contains(view, "navigate") {
+		t.Fatalf("help overlay not rendered:\n%s", view)
+	}
+
+	model, cmd := m.Update(key('q'))
+	m = model.(Model)
+	if cmd != nil || m.help {
+		t.Fatal("q should close the overlay without quitting")
+	}
+
+	if _, cmd = m.Update(key('q')); cmd == nil {
+		t.Fatal("q should quit once the overlay is closed")
+	}
+}
