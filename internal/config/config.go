@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 )
 
@@ -52,20 +54,57 @@ func vtuiTokenPath() (string, error) {
 	return filepath.Join(dir, "vtui", "token"), nil
 }
 
-// cliAuthPaths are the places the official CLI has kept its credentials, most
-// recent location first.
+// cliAuthPaths are the places the official CLI keeps its credentials, the file
+// it writes today first.
 func cliAuthPaths() []string {
 	var paths []string
-	if dir, err := os.UserConfigDir(); err == nil {
+	for _, dir := range dataHomes() {
 		paths = append(paths, filepath.Join(dir, "com.vercel.cli", "auth.json"))
 	}
-	if home, err := os.UserHomeDir(); err == nil {
-		paths = append(paths,
-			filepath.Join(home, ".local", "share", "com.vercel.cli", "auth.json"),
-			filepath.Join(home, ".config", "com.vercel.cli", "auth.json"),
-		)
-	}
 	return paths
+}
+
+// dataHomes lists the directories the CLI may have written its credentials to,
+// most likely first. The CLI resolves them with the xdg-portable package, whose
+// data directory is XDG_DATA_HOME when that is set, %APPDATA%\xdg.data on
+// Windows, the application support directory on macOS and ~/.local/share
+// elsewhere. The remaining entries are locations older builds have used.
+func dataHomes() []string {
+	var dirs []string
+	add := func(dir string) {
+		if dir != "" && !slices.Contains(dirs, dir) {
+			dirs = append(dirs, dir)
+		}
+	}
+
+	add(os.Getenv("XDG_DATA_HOME"))
+
+	switch runtime.GOOS {
+	case "windows":
+		if appData := os.Getenv("APPDATA"); appData != "" {
+			add(filepath.Join(appData, "xdg.data"))
+		}
+		if local := os.Getenv("LOCALAPPDATA"); local != "" {
+			add(filepath.Join(local, "xdg.data"))
+		}
+	case "darwin":
+		if dir, err := os.UserConfigDir(); err == nil { // ~/Library/Application Support
+			add(dir)
+		}
+	default:
+		if home, err := os.UserHomeDir(); err == nil {
+			add(filepath.Join(home, ".local", "share"))
+		}
+	}
+
+	if home, err := os.UserHomeDir(); err == nil {
+		add(filepath.Join(home, ".local", "share"))
+		add(filepath.Join(home, ".config"))
+	}
+	if dir, err := os.UserConfigDir(); err == nil {
+		add(dir)
+	}
+	return dirs
 }
 
 // ProjectLink mirrors .vercel/project.json, the artifact the official
